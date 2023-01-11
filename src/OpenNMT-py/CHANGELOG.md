@@ -4,6 +4,129 @@
 
 ## [Unreleased]
 
+## [2.3.0](https://github.com/OpenNMT/OpenNMT-py/tree/2.3.0) (2022-09-14)
+
+### New features
+* BLEU/TER (& custom) scoring during training and validation (#2198)
+* LM related tools (#2197)
+* Allow encoder/decoder freezing (#2176)
+* Dynamic data loading for inference (#2145)
+* Sentence-level scores at inference (#2196)
+* MBR and oracle reranking scoring tools (#2196)
+
+### Fixes and improvements
+* Updated beam exit condition (#2190)
+* Improve scores reporting (#2191)
+* Fix dropout scheduling (#2194)
+* Better catch CUDA ooms when training (#2195)
+* Fix source features support in inference and REST server (#2109)
+* Make REST server more flexible with dictionaries (#2104)
+* Fix target prefixing in LM decoding (#2099)
+
+## [2.2.0](https://github.com/OpenNMT/OpenNMT-py/tree/2.2.0) (2021-09-14)
+
+### New features
+* Support source features (thanks @anderleich !)
+
+### Fixes and improvements
+* Adaptations to relax torch version
+* Customizable transform statistics (#2059)
+* Adapt release code for ctranslate2 2.0
+
+## [2.1.2](https://github.com/OpenNMT/OpenNMT-py/tree/2.1.2) (2021-04-30)
+
+### Fixes and improvements
+*  Fix update_vocab for LM (#2056)
+
+## [2.1.1](https://github.com/OpenNMT/OpenNMT-py/tree/2.1.1) (2021-04-30)
+
+### Fixes and improvements
+* Fix potential deadlock (b1a4615)
+* Add more CT2 conversion checks (e4ab06c)
+
+## [2.1.0](https://github.com/OpenNMT/OpenNMT-py/tree/2.1.0) (2021-04-16)
+
+### New features
+* Allow vocab update when training from a checkpoint (cec3cc8, 2f70dfc)
+
+### Fixes and improvements
+* Various transforms related bug fixes
+* Fix beam warning and buffers reuse
+* Handle invalid lines in vocab file gracefully
+
+## [2.0.1](https://github.com/OpenNMT/OpenNMT-py/tree/2.0.1) (2021-01-27)
+
+### Fixes and improvements
+* Support embedding layer for larger vocabularies with GGNN (e8065b7)
+* Reorganize some inference options (9fb5f30)
+
+## [2.0.0](https://github.com/OpenNMT/OpenNMT-py/tree/2.0.0) (2021-01-20)
+
+First official release for OpenNMT-py major upgdate to 2.0!
+
+### New features
+* Language Model (GPT-2 style) training and inference
+* Nucleus (top-p) sampling decoding
+
+### Fixes and improvements
+* Fix some BART default values
+
+## [2.0.0rc2](https://github.com/OpenNMT/OpenNMT-py/tree/2.0.0rc2) (2020-11-10)
+
+### Fixes and improvements
+* Parallelize onmt_build_vocab (422d824)
+* Some fixes to the on-the-fly transforms
+* Some CTranslate2 related updates
+* Some fixes to the docs
+
+## [2.0.0rc1](https://github.com/OpenNMT/OpenNMT-py/tree/2.0.0rc1) (2020-09-25)
+
+This is the first release candidate for OpenNMT-py major upgdate to 2.0.0!
+
+The major idea behind this release is the -- almost -- complete **makeover of the data loading pipeline** . A new 'dynamic' paradigm is introduced, allowing to apply on the fly transforms to the data.
+
+This has a few advantages, amongst which:
+
+* remove or drastically reduce the preprocessing required to train a model;
+* increase and simplify the possibilities of data augmentation and manipulation through on-the fly transforms.
+
+These transforms can be specific **tokenization** methods, **filters**, **noising**, or **any custom transform** users may want to implement. Custom transform implementation is quite straightforward thanks to the existing base class and example implementations.
+
+You can check out how to use this new data loading pipeline in the updated [docs and examples](https://opennmt.net/OpenNMT-py).
+
+All the **readily available transforms** are described [here](https://opennmt.net/OpenNMT-py/FAQ.html#what-are-the-readily-available-on-the-fly-data-transforms).
+
+### Performance
+
+Given sufficient CPU resources according to GPU computing power, most of the transforms should not slow the training down. (Note: for now, one producer process per GPU is spawned -- meaning you would ideally need 2N CPU threads for N GPUs).
+
+### Breaking changes
+
+A few features are dropped, at least for now:
+
+* audio, image and video inputs;
+* source word features.
+
+Some very old checkpoints with previous fields and vocab structure are also incompatible with this new version.
+
+For any user that still need some of these features, the previous codebase will be retained as [`legacy` in a separate branch](https://github.com/OpenNMT/OpenNMT-py/tree/legacy). It will no longer receive extensive development from the core team but PRs may still be accepted.
+
+
+-----
+
+## [1.2.0](https://github.com/OpenNMT/OpenNMT-py/tree/1.2.0) (2020-08-17)
+### Fixes and improvements
+* Support pytorch 1.6 (e813f4d, eaaae6a)
+* Support official torch 1.6 AMP for mixed precision training (2ac1ed0)
+* Flag to override batch_size_multiple in FP16 mode, useful in some memory constrained setups (23e5018)
+* Pass a dict and allow custom options in preprocess/postprocess functions of REST server (41f0c02, 8ec54d2)
+* Allow different tokenization for source and target in REST server (bb2d045, 4659170)
+* Various bug fixes
+
+### New features
+* Gated Graph Sequence Neural Networks encoder (11e8d0), thanks @SteveKommrusch
+* Decoding with a target prefix (95aeefb, 0e143ff, 91ab592), thanks @Zenglinxiao
+
 ## [1.1.1](https://github.com/OpenNMT/OpenNMT-py/tree/1.1.1) (2020-03-20)
 ### Fixes and improvements
 * Fix backcompatibility when no 'corpus_id' field (c313c28)

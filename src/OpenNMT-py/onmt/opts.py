@@ -1,18 +1,224 @@
 """ Implementation of all available options """
-from __future__ import print_function
-
 import configargparse
-import onmt
 
 from onmt.models.sru import CheckSRU
+from onmt.transforms import AVAILABLE_TRANSFORMS
+from onmt.constants import ModelTask
+from onmt.modules.position_ffn import ACTIVATION_FUNCTIONS
+from onmt.modules.position_ffn import ActivationFunction
 
 
 def config_opts(parser):
-    parser.add('-config', '--config', required=False,
-               is_config_file_arg=True, help='config file path')
-    parser.add('-save_config', '--save_config', required=False,
-               is_write_out_config_file_arg=True,
-               help='config file save path')
+    group = parser.add_argument_group("Configuration")
+    group.add('-config', '--config', required=False,
+              is_config_file_arg=True,
+              help='Path of the main YAML config file.')
+    group.add('-save_config', '--save_config', required=False,
+              is_write_out_config_file_arg=True,
+              help='Path where to save the config.')
+
+
+def _add_logging_opts(parser, is_train=True):
+    group = parser.add_argument_group('Logging')
+    group.add('--log_file', '-log_file', type=str, default="",
+              help="Output logs to a file under this path.")
+    group.add('--log_file_level', '-log_file_level', type=str,
+              action=StoreLoggingLevelAction,
+              choices=StoreLoggingLevelAction.CHOICES,
+              default="0")
+    group.add('--verbose', '-verbose', action="store_true",
+              help='Print data loading and statistics for all process'
+              '(default only log the first process shard)' if is_train
+              else 'Print scores and predictions for each sentence')
+
+    if is_train:
+        group.add('--train_eval_steps', '-train_eval_steps',
+                  type=int, default=200,
+                  help="Print stats at this interval.")
+        group.add('--train_metrics', '-train_metrics',
+                  default=[], nargs="+",
+                  help='List of names of additional training metrics')
+        group.add('--valid_metrics', '-valid_metrics',
+                  default=[], nargs="+",
+                  help='List of names of additional validation metrics')
+        group.add('--scoring_debug', '-scoring_debug', action="store_true",
+                  help='Dump the src/ref/pred of the current batch')
+        group.add('--dump_preds', '-dump_preds',  type=str, default="",
+                  help='Folder to dump predictions to.')
+        group.add('--report_every', '-report_every', type=int, default=50,
+                  help="Print stats at this interval.")
+        group.add('--exp_host', '-exp_host', type=str, default="",
+                  help="Send logs to this crayon server.")
+        group.add('--exp', '-exp', type=str, default="",
+                  help="Name of the experiment for logging.")
+        # Use Tensorboard for visualization during training
+        group.add('--tensorboard', '-tensorboard', action="store_true",
+                  help="Use tensorboard for visualization during training. "
+                       "Must have the library tensorboard >= 1.14.")
+        group.add("--tensorboard_log_dir", "-tensorboard_log_dir",
+                  type=str, default="runs/onmt",
+                  help="Log directory for Tensorboard. "
+                       "This is also the name of the run.")
+    else:
+        # Options only during inference
+        group.add('--attn_debug', '-attn_debug', action="store_true",
+                  help='Print best attn for each word')
+        group.add('--align_debug', '-align_debug', action="store_true",
+                  help='Print best align for each word')
+        group.add('--dump_beam', '-dump_beam', type=str, default="",
+                  help='File to dump beam information to.')
+        group.add('--n_best', '-n_best', type=int, default=1,
+                  help="If verbose is set, will output the n_best "
+                       "decoded sentences")
+        group.add('--with_score', '-with_score', action="store_true",
+                  help='add a tab separated score to the translation')
+
+
+def _add_reproducibility_opts(parser):
+    group = parser.add_argument_group('Reproducibility')
+    group.add('--seed', '-seed', type=int, default=-1,
+              help="Set random seed used for better "
+                   "reproducibility between experiments.")
+
+
+def _add_dynamic_corpus_opts(parser, build_vocab_only=False):
+    """Options related to training corpus, type: a list of dictionary."""
+    group = parser.add_argument_group('Data')
+    group.add("-data", "--data", required=True,
+              help="List of datasets and their specifications. "
+                   "See examples/*.yaml for further details.")
+    group.add("-skip_empty_level", "--skip_empty_level", default="warning",
+              choices=["silent", "warning", "error"],
+              help="Security level when encounter empty examples."
+                   "silent: silently ignore/skip empty example;"
+                   "warning: warning when ignore/skip empty example;"
+                   "error: raise error & stop execution when encouter empty.")
+    group.add("-transforms", "--transforms", default=[], nargs="+",
+              choices=AVAILABLE_TRANSFORMS.keys(),
+              help="Default transform pipeline to apply to data. "
+                   "Can be specified in each corpus of data to override.")
+
+    group.add("-save_data", "--save_data", required=build_vocab_only,
+              help="Output base path for objects that will "
+                   "be saved (vocab, transforms, embeddings, ...).")
+    group.add("-overwrite", "--overwrite", action="store_true",
+              help="Overwrite existing objects if any.")
+    group.add(
+        '-n_sample', '--n_sample',
+        type=int, default=(5000 if build_vocab_only else 0),
+        help=("Build vocab using " if build_vocab_only else "Stop after save ")
+        + "this number of transformed samples/corpus. Can be [-1, 0, N>0]. "
+        "Set to -1 to go full corpus, 0 to skip.")
+
+    if not build_vocab_only:
+        group.add('-dump_fields', '--dump_fields', action='store_true',
+                  help="Dump fields `*.vocab.pt` to disk."
+                  " -save_data should be set as saving prefix.")
+        group.add('-dump_transforms', '--dump_transforms', action='store_true',
+                  help="Dump transforms `*.transforms.pt` to disk."
+                  " -save_data should be set as saving prefix.")
+    else:
+        group.add('-dump_samples', '--dump_samples', action='store_true',
+                  help="Dump samples when building vocab. "
+                  "Warning: this may slow down the process.")
+        group.add('-num_threads', '--num_threads', type=int, default=1,
+                  help="Number of parallel threads to build the vocab.")
+        group.add('-vocab_sample_queue_size', '--vocab_sample_queue_size',
+                  type=int, default=20,
+                  help="Size of queues used in the build_vocab dump path.")
+
+
+def _add_dynamic_fields_opts(parser, build_vocab_only=False):
+    """Options related to vocabulary and fields.
+
+    Add all options relate to vocabulary or fields to parser.
+    If `build_vocab_only` set to True, do not contain fields
+    related options which won't be used in `bin/build_vocab.py`.
+    """
+    group = parser.add_argument_group("Vocab")
+    group.add("-src_vocab", "--src_vocab", required=True,
+              help=("Path to save" if build_vocab_only else "Path to")
+              + " src (or shared) vocabulary file. "
+              "Format: one <word> or <word>\t<count> per line.")
+    group.add("-tgt_vocab", "--tgt_vocab",
+              help=("Path to save" if build_vocab_only else "Path to")
+              + " tgt vocabulary file. "
+              "Format: one <word> or <word>\t<count> per line.")
+    group.add("-share_vocab", "--share_vocab", action="store_true",
+              help="Share source and target vocabulary.")
+
+    group.add("-src_feats_vocab", "--src_feats_vocab",
+              help=("List of paths to save"
+                    if build_vocab_only
+                    else "List of paths to")
+              + " src features vocabulary files. "
+              "Files format: one <word> or <word>\t<count> per line.")
+
+    if not build_vocab_only:
+        group.add("-src_vocab_size", "--src_vocab_size",
+                  type=int, default=50000,
+                  help="Maximum size of the source vocabulary.")
+        group.add("-tgt_vocab_size", "--tgt_vocab_size",
+                  type=int, default=50000,
+                  help="Maximum size of the target vocabulary")
+        group.add("-vocab_size_multiple", "--vocab_size_multiple",
+                  type=int, default=1,
+                  help="Make the vocabulary size a multiple of this value.")
+
+        group.add("-src_words_min_frequency", "--src_words_min_frequency",
+                  type=int, default=0,
+                  help="Discard source words with lower frequency.")
+        group.add("-tgt_words_min_frequency", "--tgt_words_min_frequency",
+                  type=int, default=0,
+                  help="Discard target words with lower frequency.")
+
+        # Truncation options, for text corpus
+        group = parser.add_argument_group("Pruning")
+        group.add("--src_seq_length_trunc", "-src_seq_length_trunc",
+                  type=int, default=None,
+                  help="Truncate source sequence length.")
+        group.add("--tgt_seq_length_trunc", "-tgt_seq_length_trunc",
+                  type=int, default=None,
+                  help="Truncate target sequence length.")
+
+        group = parser.add_argument_group('Embeddings')
+        group.add('-both_embeddings', '--both_embeddings',
+                  help="Path to the embeddings file to use "
+                  "for both source and target tokens.")
+        group.add('-src_embeddings', '--src_embeddings',
+                  help="Path to the embeddings file to use for source tokens.")
+        group.add('-tgt_embeddings', '--tgt_embeddings',
+                  help="Path to the embeddings file to use for target tokens.")
+        group.add('-embeddings_type', '--embeddings_type',
+                  choices=["GloVe", "word2vec"],
+                  help="Type of embeddings file.")
+
+
+def _add_dynamic_transform_opts(parser):
+    """Options related to transforms.
+
+    Options that specified in the definitions of each transform class
+    at `onmt/transforms/*.py`.
+    """
+    for name, transform_cls in AVAILABLE_TRANSFORMS.items():
+        transform_cls.add_options(parser)
+
+
+def dynamic_prepare_opts(parser, build_vocab_only=False):
+    """Options related to data prepare in dynamic mode.
+
+    Add all dynamic data prepare related options to parser.
+    If `build_vocab_only` set to True, then only contains options that
+    will be used in `onmt/bin/build_vocab.py`.
+    """
+    config_opts(parser)
+    _add_dynamic_corpus_opts(parser, build_vocab_only=build_vocab_only)
+    _add_dynamic_fields_opts(parser, build_vocab_only=build_vocab_only)
+    _add_dynamic_transform_opts(parser)
+
+    if build_vocab_only:
+        _add_reproducibility_opts(parser)
+        # as for False, this will be added in _add_train_general_opts
 
 
 def model_opts(parser):
@@ -43,6 +249,8 @@ def model_opts(parser):
     group.add('--position_encoding', '-position_encoding', action='store_true',
               help="Use a sin to mark relative words positions. "
                    "Necessary for non-RNN style models.")
+    group.add("-update_vocab", "--update_vocab", action="store_true",
+              help="Update source and target existing vocabularies")
 
     group = parser.add_argument_group('Model-Embedding Features')
     group.add('--feat_merge', '-feat_merge', type=str, default='concat',
@@ -59,27 +267,46 @@ def model_opts(parser):
                    "embedding sizes will be set to N^feat_vec_exponent "
                    "where N is the number of values the feature takes.")
 
+    # Model Task Options
+    group = parser.add_argument_group("Model- Task")
+    group.add(
+        "-model_task",
+        "--model_task",
+        default=ModelTask.SEQ2SEQ,
+        choices=[ModelTask.SEQ2SEQ, ModelTask.LANGUAGE_MODEL],
+        help="Type of task for the model either seq2seq or lm",
+    )
+
     # Encoder-Decoder Options
     group = parser.add_argument_group('Model- Encoder-Decoder')
     group.add('--model_type', '-model_type', default='text',
-              choices=['text', 'img', 'audio', 'vec'],
+              choices=['text'],
               help="Type of source model to use. Allows "
                    "the system to incorporate non-text inputs. "
-                   "Options are [text|img|audio|vec].")
+                   "Options are [text].")
     group.add('--model_dtype', '-model_dtype', default='fp32',
               choices=['fp32', 'fp16'],
               help='Data type of the model.')
 
     group.add('--encoder_type', '-encoder_type', type=str, default='rnn',
-              choices=['rnn', 'brnn', 'ggnn', 'mean', 'transformer', 'cnn'],
+              choices=['rnn', 'brnn', 'ggnn', 'mean', 'transformer', 'cnn',
+                       'transformer_lm'],
               help="Type of encoder layer to use. Non-RNN layers "
                    "are experimental. Options are "
-                   "[rnn|brnn|ggnn|mean|transformer|cnn].")
+                   "[rnn|brnn|ggnn|mean|transformer|cnn|transformer_lm].")
     group.add('--decoder_type', '-decoder_type', type=str, default='rnn',
-              choices=['rnn', 'transformer', 'cnn'],
+              choices=['rnn', 'transformer', 'cnn', 'transformer_lm'],
               help="Type of decoder layer to use. Non-RNN layers "
                    "are experimental. Options are "
-                   "[rnn|transformer|cnn].")
+                   "[rnn|transformer|cnn|transformer].")
+
+    # Freeze Encoder and/or Decoder
+    group.add('--freeze_encoder', '-freeze_encoder',
+              action='store_true',
+              help="Freeze parameters in encoder.")
+    group.add('--freeze_decoder', '-freeze_decoder',
+              action='store_true',
+              help="Freeze parameters in decoder.")
 
     group.add('--layers', '-layers', type=int, default=-1,
               help='Number of layers in enc/dec.')
@@ -91,22 +318,19 @@ def model_opts(parser):
               help="Size of rnn hidden states. Overwrites "
                    "enc_rnn_size and dec_rnn_size")
     group.add('--enc_rnn_size', '-enc_rnn_size', type=int, default=500,
-              help="Size of encoder rnn hidden states. "
-                   "Must be equal to dec_rnn_size except for "
-                   "speech-to-text.")
+              help="Size of encoder rnn hidden states.")
     group.add('--dec_rnn_size', '-dec_rnn_size', type=int, default=500,
-              help="Size of decoder rnn hidden states. "
-                   "Must be equal to enc_rnn_size except for "
-                   "speech-to-text.")
-    group.add('--audio_enc_pooling', '-audio_enc_pooling',
-              type=str, default='1',
-              help="The amount of pooling of audio encoder, "
-                   "either the same amount of pooling across all layers "
-                   "indicated by a single number, or different amounts of "
-                   "pooling per layer separated by comma.")
+              help="Size of decoder rnn hidden states.")
     group.add('--cnn_kernel_width', '-cnn_kernel_width', type=int, default=3,
               help="Size of windows in the cnn, the kernel_size is "
                    "(cnn_kernel_width, 1) in conv layer")
+
+    group.add('--pos_ffn_activation_fn', '-pos_ffn_activation_fn',
+              type=str, default=ActivationFunction.relu,
+              choices=ACTIVATION_FUNCTIONS.keys(), help='The activation'
+              ' function to use in PositionwiseFeedForward layer. Choices are'
+              f' {ACTIVATION_FUNCTIONS.keys()}. Default to'
+              f' {ActivationFunction.relu}.')
 
     group.add('--input_feed', '-input_feed', type=int, default=1,
               help="Feed the context vector at each time step as "
@@ -130,7 +354,7 @@ def model_opts(parser):
               help="Type of context gate to use. "
                    "Do not select for no context gate.")
 
-    # The following options (bridge_extra_node to src_vocab) are used
+    # The following options (bridge_extra_node to n_steps) are used
     # for training with --encoder_type ggnn (Gated Graph Neural Network).
     group.add('--bridge_extra_node', '-bridge_extra_node',
               type=bool, default=True,
@@ -145,11 +369,8 @@ def model_opts(parser):
               help='Number of nodes in the graph encoder')
     group.add('--n_steps', '-n_steps', type=int, default=2,
               help='Number of steps to advance graph encoder')
-    # The ggnn uses src_vocab during training because the graph is built
-    # using edge information which requires parsing the input sequence.
-    group.add('--src_vocab', '-src_vocab', default="",
-              help="Path to an existing source vocabulary. Format: "
-                   "one word per line.")
+    group.add('--src_ggnn_size', '-src_ggnn_size', type=int, default=0,
+              help='Vocab size plus feature space for embedding input')
 
     # Attention options
     group = parser.add_argument_group('Model- Attention')
@@ -225,162 +446,12 @@ def model_opts(parser):
                    "See https://nvidia.github.io/apex/amp.html#opt-levels.")
 
 
-def preprocess_opts(parser):
-    """ Pre-procesing options """
-    # Data options
-    group = parser.add_argument_group('Data')
+def _add_train_general_opts(parser):
+    """ General options for training """
+    group = parser.add_argument_group('General')
     group.add('--data_type', '-data_type', default="text",
               help="Type of the source input. "
-                   "Options are [text|img|audio|vec].")
-
-    group.add('--train_src', '-train_src', required=True, nargs='+',
-              help="Path(s) to the training source data")
-    group.add('--train_tgt', '-train_tgt', required=True, nargs='+',
-              help="Path(s) to the training target data")
-    group.add('--train_align', '-train_align', nargs='+', default=[None],
-              help="Path(s) to the training src-tgt alignment")
-    group.add('--train_ids', '-train_ids', nargs='+', default=[None],
-              help="ids to name training shards, used for corpus weighting")
-
-    group.add('--valid_src', '-valid_src',
-              help="Path to the validation source data")
-    group.add('--valid_tgt', '-valid_tgt',
-              help="Path to the validation target data")
-    group.add('--valid_align', '-valid_align', default=None,
-              help="Path(s) to the validation src-tgt alignment")
-
-    group.add('--src_dir', '-src_dir', default="",
-              help="Source directory for image or audio files.")
-
-    group.add('--save_data', '-save_data', required=True,
-              help="Output file for the prepared data")
-
-    group.add('--max_shard_size', '-max_shard_size', type=int, default=0,
-              help="""Deprecated use shard_size instead""")
-
-    group.add('--shard_size', '-shard_size', type=int, default=1000000,
-              help="Divide src_corpus and tgt_corpus into "
-                   "smaller multiple src_copus and tgt corpus files, then "
-                   "build shards, each shard will have "
-                   "opt.shard_size samples except last shard. "
-                   "shard_size=0 means no segmentation "
-                   "shard_size>0 means segment dataset into multiple shards, "
-                   "each shard has shard_size samples")
-
-    group.add('--num_threads', '-num_threads', type=int, default=1,
-              help="Number of shards to build in parallel.")
-
-    group.add('--overwrite', '-overwrite', action="store_true",
-              help="Overwrite existing shards if any.")
-
-    # Dictionary options, for text corpus
-
-    group = parser.add_argument_group('Vocab')
-    # if you want to pass an existing vocab.pt file, pass it to
-    # -src_vocab alone as it already contains tgt vocab.
-    group.add('--src_vocab', '-src_vocab', default="",
-              help="Path to an existing source vocabulary. Format: "
-                   "one word per line.")
-    group.add('--tgt_vocab', '-tgt_vocab', default="",
-              help="Path to an existing target vocabulary. Format: "
-                   "one word per line.")
-    group.add('--features_vocabs_prefix', '-features_vocabs_prefix',
-              type=str, default='',
-              help="Path prefix to existing features vocabularies")
-    group.add('--src_vocab_size', '-src_vocab_size', type=int, default=50000,
-              help="Size of the source vocabulary")
-    group.add('--tgt_vocab_size', '-tgt_vocab_size', type=int, default=50000,
-              help="Size of the target vocabulary")
-    group.add('--vocab_size_multiple', '-vocab_size_multiple',
-              type=int, default=1,
-              help="Make the vocabulary size a multiple of this value")
-
-    group.add('--src_words_min_frequency',
-              '-src_words_min_frequency', type=int, default=0)
-    group.add('--tgt_words_min_frequency',
-              '-tgt_words_min_frequency', type=int, default=0)
-
-    group.add('--dynamic_dict', '-dynamic_dict', action='store_true',
-              help="Create dynamic dictionaries")
-    group.add('--share_vocab', '-share_vocab', action='store_true',
-              help="Share source and target vocabulary")
-
-    # Truncation options, for text corpus
-    group = parser.add_argument_group('Pruning')
-    group.add('--src_seq_length', '-src_seq_length', type=int, default=50,
-              help="Maximum source sequence length")
-    group.add('--src_seq_length_trunc', '-src_seq_length_trunc',
-              type=int, default=None,
-              help="Truncate source sequence length.")
-    group.add('--tgt_seq_length', '-tgt_seq_length', type=int, default=50,
-              help="Maximum target sequence length to keep.")
-    group.add('--tgt_seq_length_trunc', '-tgt_seq_length_trunc',
-              type=int, default=None,
-              help="Truncate target sequence length.")
-    group.add('--lower', '-lower', action='store_true', help='lowercase data')
-    group.add('--filter_valid', '-filter_valid', action='store_true',
-              help='Filter validation data by src and/or tgt length')
-
-    # Data processing options
-    group = parser.add_argument_group('Random')
-    group.add('--shuffle', '-shuffle', type=int, default=0,
-              help="Shuffle data")
-    group.add('--seed', '-seed', type=int, default=3435,
-              help="Random seed")
-
-    group = parser.add_argument_group('Logging')
-    group.add('--report_every', '-report_every', type=int, default=100000,
-              help="Report status every this many sentences")
-    group.add('--log_file', '-log_file', type=str, default="",
-              help="Output logs to a file under this path.")
-    group.add('--log_file_level', '-log_file_level', type=str,
-              action=StoreLoggingLevelAction,
-              choices=StoreLoggingLevelAction.CHOICES,
-              default="0")
-
-    # Options most relevant to speech
-    group = parser.add_argument_group('Speech')
-    group.add('--sample_rate', '-sample_rate', type=int, default=16000,
-              help="Sample rate.")
-    group.add('--window_size', '-window_size', type=float, default=.02,
-              help="Window size for spectrogram in seconds.")
-    group.add('--window_stride', '-window_stride', type=float, default=.01,
-              help="Window stride for spectrogram in seconds.")
-    group.add('--window', '-window', default='hamming',
-              help="Window type for spectrogram generation.")
-
-    # Option most relevant to image input
-    group.add('--image_channel_size', '-image_channel_size',
-              type=int, default=3,
-              choices=[3, 1],
-              help="Using grayscale image can training "
-                   "model faster and smaller")
-
-    # Options for experimental source noising (BART style)
-    group = parser.add_argument_group('Noise')
-    group.add('--subword_prefix', '-subword_prefix',
-              type=str, default="▁",
-              help="subword prefix to build wordstart mask")
-    group.add('--subword_prefix_is_joiner', '-subword_prefix_is_joiner',
-              action='store_true',
-              help="mask will need to be inverted if prefix is joiner")
-
-
-def train_opts(parser):
-    """ Training and saving options """
-
-    group = parser.add_argument_group('General')
-    group.add('--data', '-data', required=True,
-              help='Path prefix to the ".train.pt" and '
-                   '".valid.pt" file path from preprocess.py')
-
-    group.add('--data_ids', '-data_ids', nargs='+', default=[None],
-              help="In case there are several corpora.")
-    group.add('--data_weights', '-data_weights', type=int, nargs='+',
-              default=[1], help="""Weights of different corpora,
-              should follow the same order as in -data_ids.""")
-    group.add('--data_to_noise', '-data_to_noise', nargs='+', default=[],
-              help="IDs of datasets on which to apply noise.")
+                   "Options are [text].")
 
     group.add('--save_model', '-save_model', default='model',
               help="Model filename (the model will be saved as "
@@ -412,9 +483,7 @@ def train_opts(parser):
     group.add('--queue_size', '-queue_size', default=40, type=int,
               help="Size of queue for each process in producer/consumer")
 
-    group.add('--seed', '-seed', type=int, default=-1,
-              help="Random seed used for the experiments "
-                   "reproducibility.")
+    _add_reproducibility_opts(parser)
 
     # Init options
     group = parser.add_argument_group('Initialization')
@@ -442,18 +511,21 @@ def train_opts(parser):
               help="If a valid path is specified, then this will load "
                    "pretrained word embeddings on the decoder side. "
                    "See README for specific formatting instructions.")
-    # Fixed word vectors
-    group.add('--fix_word_vecs_enc', '-fix_word_vecs_enc',
+    # Freeze word vectors
+    group.add('--freeze_word_vecs_enc', '-freeze_word_vecs_enc',
               action='store_true',
-              help="Fix word embeddings on the encoder side.")
-    group.add('--fix_word_vecs_dec', '-fix_word_vecs_dec',
+              help="Freeze word embeddings on the encoder side.")
+    group.add('--freeze_word_vecs_dec', '-freeze_word_vecs_dec',
               action='store_true',
-              help="Fix word embeddings on the decoder side.")
+              help="Freeze word embeddings on the decoder side.")
 
     # Optimization options
     group = parser.add_argument_group('Optimization- Type')
     group.add('--batch_size', '-batch_size', type=int, default=64,
               help='Maximum batch size for training')
+    group.add('--batch_size_multiple', '-batch_size_multiple',
+              type=int, default=None,
+              help='Batch size multiple for token batches.')
     group.add('--batch_type', '-batch_type', default='sents',
               choices=["sents", "tokens"],
               help="Batch grouping for batch_size. Standard "
@@ -554,12 +626,6 @@ def train_opts(parser):
               help="Step for moving average. "
                    "Default is every update, "
                    "if -average_decay is set.")
-    group.add("--src_noise", "-src_noise", type=str, nargs='+',
-              default=[],
-              choices=onmt.modules.source_noise.MultiNoise.NOISES.keys())
-    group.add("--src_noise_prob", "-src_noise_prob", type=float, nargs='+',
-              default=[],
-              help="Probabilities of src_noise functions")
 
     # learning rate
     group = parser.add_argument_group('Optimization- Rate')
@@ -584,44 +650,114 @@ def train_opts(parser):
               help="Use a custom decay rate.")
     group.add('--warmup_steps', '-warmup_steps', type=int, default=4000,
               help="Number of warmup steps for custom decay.")
-
-    group = parser.add_argument_group('Logging')
-    group.add('--report_every', '-report_every', type=int, default=50,
-              help="Print stats at this interval.")
-    group.add('--log_file', '-log_file', type=str, default="",
-              help="Output logs to a file under this path.")
-    group.add('--log_file_level', '-log_file_level', type=str,
-              action=StoreLoggingLevelAction,
-              choices=StoreLoggingLevelAction.CHOICES,
-              default="0")
-    group.add('--exp_host', '-exp_host', type=str, default="",
-              help="Send logs to this crayon server.")
-    group.add('--exp', '-exp', type=str, default="",
-              help="Name of the experiment for logging.")
-    # Use Tensorboard for visualization during training
-    group.add('--tensorboard', '-tensorboard', action="store_true",
-              help="Use tensorboard for visualization during training. "
-                   "Must have the library tensorboard >= 1.14.")
-    group.add("--tensorboard_log_dir", "-tensorboard_log_dir",
-              type=str, default="runs/onmt",
-              help="Log directory for Tensorboard. "
-                   "This is also the name of the run.")
-
-    group = parser.add_argument_group('Speech')
-    # Options most relevant to speech
-    group.add('--sample_rate', '-sample_rate', type=int, default=16000,
-              help="Sample rate.")
-    group.add('--window_size', '-window_size', type=float, default=.02,
-              help="Window size for spectrogram in seconds.")
-
-    # Option most relevant to image input
-    group.add('--image_channel_size', '-image_channel_size',
-              type=int, default=3, choices=[3, 1],
-              help="Using grayscale image can training "
-                   "model faster and smaller")
+    _add_logging_opts(parser, is_train=True)
 
 
-def translate_opts(parser):
+def _add_train_dynamic_data(parser):
+    group = parser.add_argument_group("Dynamic data")
+    group.add("-bucket_size", "--bucket_size", type=int, default=2048,
+              help="Examples per dynamically generated torchtext Dataset.")
+
+
+def train_opts(parser):
+    """All options used in train."""
+    # options relate to data preprare
+    dynamic_prepare_opts(parser, build_vocab_only=False)
+    # options relate to train
+    model_opts(parser)
+    _add_train_general_opts(parser)
+    _add_train_dynamic_data(parser)
+
+
+def _add_decoding_opts(parser):
+    group = parser.add_argument_group('Beam Search')
+    beam_size = group.add('--beam_size', '-beam_size', type=int, default=5,
+                          help='Beam size')
+    group.add('--ratio', '-ratio', type=float, default=-0.,
+              help="Ratio based beam stop condition")
+
+    group = parser.add_argument_group('Random Sampling')
+    group.add('--random_sampling_topk', '-random_sampling_topk',
+              default=0, type=int,
+              help="Set this to -1 to do random sampling from full "
+                   "distribution. Set this to value k>1 to do random "
+                   "sampling restricted to the k most likely next tokens. "
+                   "Set this to 1 to use argmax.")
+    group.add('--random_sampling_topp', '-random_sampling_topp',
+              default=0.0, type=float,
+              help="Probability for top-p/nucleus sampling. Restrict tokens"
+                   " to the most likely until the cumulated probability is"
+                   " over p. In range [0, 1]."
+                   " https://arxiv.org/abs/1904.09751")
+    group.add('--random_sampling_temp', '-random_sampling_temp',
+              default=1., type=float,
+              help="If doing random sampling, divide the logits by "
+                   "this before computing softmax during decoding.")
+    group._group_actions.append(beam_size)
+    _add_reproducibility_opts(parser)
+
+    group = parser.add_argument_group(
+        'Penalties',
+        '.. Note:: Coverage Penalty is not available in sampling.')
+    # Alpha and Beta values for Google Length + Coverage penalty
+    # Described here: https://arxiv.org/pdf/1609.08144.pdf, Section 7
+    # Length penalty options
+    group.add('--length_penalty', '-length_penalty', default='none',
+              choices=['none', 'wu', 'avg'],
+              help="Length Penalty to use.")
+    group.add('--alpha', '-alpha', type=float, default=1.,
+              help="Length penalty parameter"
+                   "(higher = longer generation)")
+    # Coverage penalty options
+    group.add('--coverage_penalty', '-coverage_penalty', default='none',
+              choices=['none', 'wu', 'summary'],
+              help="Coverage Penalty to use. Only available in beam search.")
+    group.add('--beta', '-beta', type=float, default=-0.,
+              help="Coverage penalty parameter")
+    group.add('--stepwise_penalty', '-stepwise_penalty', action='store_true',
+              help="Apply coverage penalty at every decoding step. "
+                   "Helpful for summary penalty.")
+
+    group = parser.add_argument_group(
+        'Decoding tricks',
+        '.. Tip:: Following options can be used to limit the decoding length '
+        'or content.'
+        )
+    # Decoding Length constraint
+    group.add('--min_length', '-min_length', type=int, default=0,
+              help='Minimum prediction length')
+    group.add('--max_length', '-max_length', type=int, default=100,
+              help='Maximum prediction length.')
+    group.add('--max_sent_length', '-max_sent_length', action=DeprecateAction,
+              help="Deprecated, use `-max_length` instead")
+    # Decoding content constraint
+    group.add('--block_ngram_repeat', '-block_ngram_repeat',
+              type=int, default=0,
+              help='Block repetition of ngrams during decoding.')
+    group.add('--ignore_when_blocking', '-ignore_when_blocking',
+              nargs='+', type=str, default=[],
+              help="Ignore these strings when blocking repeats. "
+                   "You want to block sentence delimiters.")
+    group.add('--replace_unk', '-replace_unk', action="store_true",
+              help="Replace the generated UNK tokens with the "
+                   "source token that had highest attention weight. If "
+                   "phrase_table is provided, it will look up the "
+                   "identified source token and give the corresponding "
+                   "target token. If it is not provided (or the identified "
+                   "source token does not exist in the table), then it "
+                   "will copy the source token.")
+    group.add('--ban_unk_token', '-ban_unk_token',
+              action="store_true",
+              help="Prevent unk token generation by setting unk proba to 0")
+    group.add('--phrase_table', '-phrase_table', type=str, default="",
+              help="If phrase_table is provided (with replace_unk), it will "
+                   "look up the identified source token and give the "
+                   "corresponding target token. If it is not provided "
+                   "(or the identified source token does not exist in "
+                   "the table), then it will copy the source token.")
+
+
+def translate_opts(parser, dynamic=False):
     """ Translation / inference options """
     group = parser.add_argument_group('Model')
     group.add('--model', '-model', dest='models', metavar='MODEL',
@@ -629,9 +765,14 @@ def translate_opts(parser):
               help="Path to model .pt file(s). "
                    "Multiple models can be specified, "
                    "for ensemble decoding.")
+    group.add('--nmt_model', '-nmt_model', dest='nmt_model', metavar='MODEL',
+              nargs='+', type=str, default=[], required=False,
+              help="Path to nmt model ckpt for TPR swap accuracy computation")
     group.add('--fp32', '-fp32', action='store_true',
               help="Force the model to be in FP32 "
                    "because FP16 is very slow on GTX1080(ti).")
+    group.add('--int8', '-int8', action='store_true',
+              help="Enable dynamic 8-bit quantization (CPU only).")
     group.add('--avg_raw_probs', '-avg_raw_probs', action='store_true',
               help="If this is set, during ensembling scores from "
                    "different models will be combined by averaging their "
@@ -639,18 +780,20 @@ def translate_opts(parser):
                    "the log probabilities will be averaged directly. "
                    "Necessary for models whose output layers can assign "
                    "zero probability.")
-
     group = parser.add_argument_group('Data')
     group.add('--data_type', '-data_type', default="text",
-              help="Type of the source input. Options: [text|img].")
+              help="Type of the source input. Options: [text].")
 
     group.add('--src', '-src', required=True,
               help="Source sequence to decode (one line per "
                    "sequence)")
-    group.add('--src_dir', '-src_dir', default="",
-              help='Source directory for image or audio files')
+    group.add("-src_feats", "--src_feats", required=False,
+              help="Source sequence features (dict format). "
+                   "Ex: {'feat_0': '../data.txt.feats0', 'feat_1': '../data.txt.feats1'}")  # noqa: E501
     group.add('--tgt', '-tgt',
               help='True target sequence (optional)')
+    group.add('--tgt_prefix', '-tgt_prefix', action='store_true',
+              help='Generate predictions using provided `-tgt` as prefix.')
     group.add('--shard_size', '-shard_size', type=int, default=10000,
               help="Divide src and tgt (if applicable) into "
                    "smaller multiple src and tgt files, then "
@@ -667,79 +810,103 @@ def translate_opts(parser):
     group.add('--report_time', '-report_time', action='store_true',
               help="Report some translation time metrics")
 
-    # Options most relevant to summarization.
-    group.add('--dynamic_dict', '-dynamic_dict', action='store_true',
-              help="Create dynamic dictionaries")
-    group.add('--share_vocab', '-share_vocab', action='store_true',
-              help="Share source and target vocabulary")
+    # Adding options relate to decoding strategy
+    _add_decoding_opts(parser)
 
+    # Adding option for logging
+    _add_logging_opts(parser, is_train=False)
+
+    group = parser.add_argument_group('Efficiency')
+    group.add('--batch_size', '-batch_size', type=int, default=30,
+              help='Batch size')
+    group.add('--batch_type', '-batch_type', default='sents',
+              choices=["sents", "tokens"],
+              help="Batch grouping for batch_size. Standard "
+                   "is sents. Tokens will do dynamic batching")
+    group.add('--gpu', '-gpu', type=int, default=-1,
+              help="Device to run on")
+
+    if dynamic:
+        group.add("-transforms", "--transforms", default=[], nargs="+",
+                  choices=AVAILABLE_TRANSFORMS.keys(),
+                  help="Default transform pipeline to apply to data.")
+
+        # Adding options related to Transforms
+        _add_dynamic_transform_opts(parser)
+
+
+def prepare_role_data_opts(parser):
+    """ Extracting Embedding options """
+    group = parser.add_argument_group('Model')
+    group.add('--model', '-model', dest='models', metavar='MODEL',
+              nargs='+', type=str, default=[], required=True,
+              help="Path to model .pt file(s). "
+                   "Multiple models can be specified, "
+                   "for ensemble decoding.")
+    group.add('--fp32', '-fp32', action='store_true',
+              help="Force the model to be in FP32 "
+                   "because FP16 is very slow on GTX1080(ti).")
+    group.add('--avg_raw_probs', '-avg_raw_probs', action='store_true',
+              help="If this is set, during ensembling scores from "
+                   "different models will be combined by averaging their "
+                   "raw probabilities and then taking the log. Otherwise, "
+                   "the log probabilities will be averaged directly. "
+                   "Necessary for models whose output layers can assign "
+                   "zero probability.")
+    group.add('--model_save_dir', '-model_save_dir', default='../../../../saved_models/',
+              help="Dir where the COGS decoder model will be saved")
+    group.add('--model_prefix', '-model_prefix', default='cogs_decoder',
+              help="Unique Identifier of COGS Decoder")
+    group.add('--int8', '-int8', action='store_true',
+              help="Enable dynamic 8-bit quantization (CPU only).")
+    group.add('--rnn_type', '-rnn_type', type=str, default='LSTM',
+              choices=['LSTM', 'GRU', 'SRU'],
+              help="The gate type to use in the RNNs")
+    group.add('--layers', '-layers', type=int, default=-1,
+              help='Number of layers in enc/dec.')
+
+    group = parser.add_argument_group('Data')
+    group.add('--data_type', '-data_type', default="text",
+              help="Type of the source input. Options: [text|img].")
+
+    group.add('--src', '-src', required=True,
+              help="Source sequence to decode (one line per "
+                   "sequence)")
+    group.add('--src_dir', '-src_dir', default="",
+              help='Source directory for image or audio files')
+    group.add("-src_feats", "--src_feats", required=False,
+              help="Source sequence features (dict format). "
+                   "Ex: {'feat_0': '../data.txt.feats0', 'feat_1': '../data.txt.feats1'}")
+    group.add('--tgt', '-tgt', required=True,
+              help="Target sequence to decode (one line per "
+                   "sequence)")
+    group.add('--tgt_dir', '-tgt_dir', default="",
+              help='Target directory for image or audio files')
+    group.add("-tgt_feats", "--tgt_feats", required=False,
+              help="Target sequence features (dict format). "
+                   "Ex: {'feat_0': '../data.txt.feats0', 'feat_1': '../data.txt.feats1'}")
+    group.add('--shard_size', '-shard_size', type=int, default=10000,
+              help="Divide src and tgt (if applicable) into "
+                   "smaller multiple src and tgt files, then "
+                   "build shards, each shard will have "
+                   "opt.shard_size samples except last shard. "
+                   "shard_size=0 means no segmentation "
+                   "shard_size>0 means segment dataset into multiple shards, "
+                   "each shard has shard_size samples")
+    group.add('--output', '-output', default='pred.txt',
+              help="Path to output the predictions (each line will "
+                   "be the decoded sequence")
     group = parser.add_argument_group('Random Sampling')
-    group.add('--random_sampling_topk', '-random_sampling_topk',
-              default=1, type=int,
-              help="Set this to -1 to do random sampling from full "
-                   "distribution. Set this to value k>1 to do random "
-                   "sampling restricted to the k most likely next tokens. "
-                   "Set this to 1 to use argmax or for doing beam "
-                   "search.")
-    group.add('--random_sampling_temp', '-random_sampling_temp',
-              default=1., type=float,
-              help="If doing random sampling, divide the logits by "
-                   "this before computing softmax during decoding.")
     group.add('--seed', '-seed', type=int, default=829,
               help="Random seed")
 
     group = parser.add_argument_group('Beam')
-    group.add('--beam_size', '-beam_size', type=int, default=5,
-              help='Beam size')
-    group.add('--min_length', '-min_length', type=int, default=0,
-              help='Minimum prediction length')
-    group.add('--max_length', '-max_length', type=int, default=100,
-              help='Maximum prediction length.')
-    group.add('--max_sent_length', '-max_sent_length', action=DeprecateAction,
-              help="Deprecated, use `-max_length` instead")
 
-    # Alpha and Beta values for Google Length + Coverage penalty
-    # Described here: https://arxiv.org/pdf/1609.08144.pdf, Section 7
-    group.add('--stepwise_penalty', '-stepwise_penalty', action='store_true',
-              help="Apply penalty at every decoding step. "
-                   "Helpful for summary penalty.")
-    group.add('--length_penalty', '-length_penalty', default='none',
-              choices=['none', 'wu', 'avg'],
-              help="Length Penalty to use.")
-    group.add('--ratio', '-ratio', type=float, default=-0.,
-              help="Ratio based beam stop condition")
-    group.add('--coverage_penalty', '-coverage_penalty', default='none',
-              choices=['none', 'wu', 'summary'],
-              help="Coverage Penalty to use.")
-    group.add('--alpha', '-alpha', type=float, default=0.,
-              help="Google NMT length penalty parameter "
-                   "(higher = longer generation)")
-    group.add('--beta', '-beta', type=float, default=-0.,
-              help="Coverage penalty parameter")
-    group.add('--block_ngram_repeat', '-block_ngram_repeat',
-              type=int, default=0,
-              help='Block repetition of ngrams during decoding.')
-    group.add('--ignore_when_blocking', '-ignore_when_blocking',
-              nargs='+', type=str, default=[],
-              help="Ignore these strings when blocking repeats. "
-                   "You want to block sentence delimiters.")
-    group.add('--replace_unk', '-replace_unk', action="store_true",
-              help="Replace the generated UNK tokens with the "
-                   "source token that had highest attention weight. If "
-                   "phrase_table is provided, it will look up the "
-                   "identified source token and give the corresponding "
-                   "target token. If it is not provided (or the identified "
-                   "source token does not exist in the table), then it "
-                   "will copy the source token.")
-    group.add('--phrase_table', '-phrase_table', type=str, default="",
-              help="If phrase_table is provided (with replace_unk), it will "
-                   "look up the identified source token and give the "
-                   "corresponding target token. If it is not provided "
-                   "(or the identified source token does not exist in "
-                   "the table), then it will copy the source token.")
     group = parser.add_argument_group('Logging')
     group.add('--verbose', '-verbose', action="store_true",
               help='Print scores and predictions for each sentence')
+    group.add('--debug', '-debug', action="store_true",
+              help='Print debug statements when executing script')
     group.add('--log_file', '-log_file', type=str, default="",
               help="Output logs to a file under this path.")
     group.add('--log_file_level', '-log_file_level', type=str,
@@ -766,22 +933,135 @@ def translate_opts(parser):
     group.add('--gpu', '-gpu', type=int, default=-1,
               help="Device to run on")
 
-    # Options most relevant to speech.
-    group = parser.add_argument_group('Speech')
-    group.add('--sample_rate', '-sample_rate', type=int, default=16000,
-              help="Sample rate.")
-    group.add('--window_size', '-window_size', type=float, default=.02,
-              help='Window size for spectrogram in seconds')
-    group.add('--window_stride', '-window_stride', type=float, default=.01,
-              help='Window stride for spectrogram in seconds')
-    group.add('--window', '-window', default='hamming',
-              help='Window type for spectrogram generation')
 
-    # Option most relevant to image input
-    group.add('--image_channel_size', '-image_channel_size',
-              type=int, default=3, choices=[3, 1],
-              help="Using grayscale image can training "
-                   "model faster and smaller")
+
+
+def tpr_opts(parser):
+    group = parser.add_argument_group('TPR Encoder')
+    group.add_argument('-tpr_data_prefix', "--tpr_data_prefix",
+                       help="prefix for the vectors", type=str, default=None)
+    group.add_argument('-tpr_filler_map', "--tpr_filler_map",
+                       help="filler_to_index map used for training TPR",
+                       type=str, default=None)
+    group.add_argument("--tpr_role_mapping",
+                       help="role mapping to use from ROLE training",
+                       type=str)
+    group.add('-tpr_config', '--tpr_config', required=True,
+              is_config_file_arg=True, help='tpr config file path')
+    group.add('-tpr_ckpt', '--tpr_ckpt', required=False, default=None,
+              help='path to checkpoint file for trained TPR Encoder',
+              type=str)
+    group.add_argument("--n_roles", help="number of roles to use",
+                       type=int, default=10)
+    group.add_argument("--n_fillers", help="number of fillers to use",
+                       type=int, default=10)
+    group.add_argument("--filler_dim", help="embedding dimension for fillers",
+                       type=int, default=10)
+    group.add_argument("--role_dim", help="embedding dimension for roles",
+                       type=int, default=6)
+    group.add_argument("--vocab_size", help="vocab size for the training language",
+                       type=int,
+                       default=10)
+    group.add_argument("--hidden_size", help="size of the encodings",
+                       type=int, default=60)
+    group.add_argument("--save_vectors",
+                        help="whether to save vectors generated by the fitted TPR model", type=str,
+                        default="False")
+    group.add_argument("--save_role_dicts",
+                        help="whether to save role_to_index and index_to_role or not", type=str,
+                        default="False")
+    group.add_argument("--embedding_file", help="file containing pretrained embeddings", type=str,
+                        default=None)
+    group.add_argument("--weights_matrix", help="", type=int,
+                        default=None)
+    group.add_argument("--unseen_words",
+                        help="if using pretrained embeddings: whether to use all zeroes for unseen "
+                                  "words' embeddings, or to give them random vectors",
+                        type=str, default="zero")
+    group.add_argument("--neighbor_analysis", help="whether to use a neighbor analysis", type=str,
+                        default="True")
+    group.add_argument("--digits", help="whether this is one of the digit task", type=str,
+                        default="True")
+    group.add_argument("--final_linear", help="whether to have a final linear layer", type=str,
+                        default="True")
+    group.add_argument("--embed_squeeze", help="original dimension to be squeezed to filler_dim",
+                        type=int, default=None)
+    group.add_argument("--role_learning", help="A flag for whether to enable role learning or use "
+                                            "the provided roles.", action="store_true")
+    group.add_argument("--bidirectional", help="A flag for whether the role learning module is "
+                                            "bidirectional.", action="store_true")
+    group.add_argument(
+    "--role_assignment_shrink_filler_dim",
+    help="If specified, the filler embedding is shrunk to this size before being input to the "
+         "role assignment LSTM.",
+    default=None,
+    type=int)
+    group.add_argument(
+    "--use_one_hot_temperature",
+    help="A flag for whether role learning one hot regularization should have an increasing "
+         "temperature.",
+    action="store_true")
+    group.add_argument(
+    "--role_assigner_num_layers",
+    help="The number of layers for the role assignment network.",
+    default=1,
+    type=int
+    )
+    group.add_argument(
+    "--patience",
+    help="The number of epochs to train if validation loss isn't improving",
+    type=int,
+    default=10
+    )
+    group.add_argument(
+    "--pretrained_filler_embedding",
+    help="A weight file containing a pretrained filler embedding",
+    type=str,
+    default=None
+    )
+    group.add_argument(
+    "--softmax_roles",
+    help="Whether the role predictions should be run through a softmax",
+    action="store_true"
+    )
+    group.add_argument(
+    "--one_hot_regularization_weight",
+    help="The weight applied to the one hot regularization term",
+    type=float,
+    default=1.0
+    )
+    group.add_argument(
+    "--l2_norm_regularization_weight",
+    help="The weight applied to the l2 norm regularization term",
+    type=float,
+    default=1.0
+    )
+    group.add_argument(
+    "--unique_role_regularization_weight",
+    help="The weight applied to the unique role regularization term",
+    type=float,
+    default=1.0
+    )
+    group.add_argument(
+    "--num_roles",
+    help="The number of roles to give a role learning network. This value is only used when "
+         "--role_learning is enabled.",
+    type=int,
+    default=None
+    )
+    group.add_argument(
+    "--burn_in",
+    help="The number of epochs to train without regularization",
+    type=int,
+    default=0
+    )
+    group.add_argument(
+    "--shuffle",
+    help="Whether to shuffle the input fillers and corresponding embedding. This is to generate a"
+         " value by which to normalize the MSE to compare different role schemes across "
+         "different tasks.",
+    action="store_true"
+    )
 
 
 # Copyright 2016 The Chromium Authors. All rights reserved.

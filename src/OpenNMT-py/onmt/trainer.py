@@ -1,3 +1,4 @@
+
 """
     This is the loadable seq2seq trainer library that is
     in charge of training details, loss compute, and statistics.
@@ -14,6 +15,8 @@ import traceback
 
 import onmt.utils
 from onmt.utils.logging import logger
+from onmt.translate.utils import ScoringPreparator
+from onmt.scorers import get_scorers_cls, build_scorers
 
 
 def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
@@ -26,7 +29,7 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
         fields (dict): dict of fields
         optim (:obj:`onmt.utils.Optimizer`): optimizer used during training
         data_type (str): string describing the type of data
-            e.g. "text", "img", "audio"
+            e.g. "text"
         model_saver(:obj:`onmt.models.ModelSaverBase`): the utility object
             used to save the model
     """
@@ -35,6 +38,12 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
     train_loss = onmt.utils.loss.build_loss_compute(model, tgt_field, opt)
     valid_loss = onmt.utils.loss.build_loss_compute(
         model, tgt_field, opt, train=False)
+
+    scoring_preparator = ScoringPreparator(fields, opt)
+    scorers_cls = get_scorers_cls(opt.train_metrics)
+    train_scorers = build_scorers(opt, scorers_cls)
+    scorers_cls = get_scorers_cls(opt.valid_metrics)
+    valid_scorers = build_scorers(opt, scorers_cls)
 
     trunc_size = opt.truncated_decoder  # Badly named...
     shard_size = opt.max_generator_batches if opt.model_dtype == 'fp32' else 0
@@ -45,58 +54,43 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
     average_decay = opt.average_decay
     average_every = opt.average_every
     dropout = opt.dropout
+    attention_dropout = opt.attention_dropout
     dropout_steps = opt.dropout_steps
     if device_id >= 0:
         gpu_rank = opt.gpu_ranks[device_id]
     else:
-        gpu_rank = 0
+        gpu_rank = -1
         n_gpu = 0
     gpu_verbose_level = opt.gpu_verbose_level
 
     earlystopper = onmt.utils.EarlyStopping(
-        opt.early_stopping, scorers=onmt.utils.scorers_from_opts(opt), base_path=opt.save_model) \
+        opt.early_stopping, scorers=onmt.utils.scorers_from_opts(opt)) \
         if opt.early_stopping > 0 else None
 
-    source_noise = None
-    if len(opt.src_noise) > 0:
-        src_field = dict(fields)["src"].base_field
-        corpus_id_field = dict(fields).get("corpus_id", None)
-        if corpus_id_field is not None:
-            ids_to_noise = corpus_id_field.numericalize(opt.data_to_noise)
-        else:
-            ids_to_noise = None
-        source_noise = onmt.modules.source_noise.MultiNoise(
-            opt.src_noise,
-            opt.src_noise_prob,
-            ids_to_noise=ids_to_noise,
-            pad_idx=src_field.pad_token,
-            end_of_sentence_mask=src_field.end_of_sentence_mask,
-            word_start_mask=src_field.word_start_mask,
-            device_id=device_id
-        )
-
     report_manager = onmt.utils.build_report_manager(opt, gpu_rank)
-    trainer = onmt.Trainer(model, train_loss, valid_loss, optim, trunc_size,
+    trainer = onmt.Trainer(model,
+                           train_loss, valid_loss,
+                           scoring_preparator, train_scorers, valid_scorers,
+                           optim, trunc_size,
                            shard_size, norm_method,
                            accum_count, accum_steps,
-                           n_gpu, gpu_rank,
-                           gpu_verbose_level, report_manager,
+                           n_gpu, gpu_rank, gpu_verbose_level,
+                           opt.train_eval_steps, report_manager,
                            with_align=True if opt.lambda_align > 0 else False,
-                           model_saver=model_saver if gpu_rank == 0 else None,
+                           model_saver=model_saver if gpu_rank <= 0 else None,
                            average_decay=average_decay,
                            average_every=average_every,
                            model_dtype=opt.model_dtype,
                            earlystopper=earlystopper,
                            dropout=dropout,
-                           dropout_steps=dropout_steps,
-                           source_noise=source_noise)
+                           attention_dropout=attention_dropout,
+                           dropout_steps=dropout_steps)
     return trainer
 
 
 class Trainer(object):
     """
     Class that controls the training process.
-
     Args:
             model(:py:class:`onmt.models.model.NMTModel`): translation model
                 to train
@@ -108,7 +102,7 @@ class Trainer(object):
                the optimizer responsible for update
             trunc_size(int): length of truncated back propagation through time
             shard_size(int): compute loss in shards of this size for efficiency
-            data_type(string): type of the source input: [text|img|audio]
+            data_type(string): type of the source input: [text]
             norm_method(string): normalization methods: [sents|tokens]
             accum_count(list): accumulate gradients this many times.
             accum_steps(list): steps for accum gradients changes.
@@ -119,19 +113,27 @@ class Trainer(object):
                 Thus nothing will be saved if this parameter is None
     """
 
-    def __init__(self, model, train_loss, valid_loss, optim,
+    def __init__(self, model, train_loss, valid_loss,
+                 scoring_preparator, train_scorers, valid_scorers,
+                 optim,
                  trunc_size=0, shard_size=32,
                  norm_method="sents", accum_count=[1],
                  accum_steps=[0],
                  n_gpu=1, gpu_rank=1, gpu_verbose_level=0,
+                 train_eval_steps=200,
                  report_manager=None, with_align=False, model_saver=None,
                  average_decay=0, average_every=1, model_dtype='fp32',
-                 earlystopper=None, dropout=[0.3], dropout_steps=[0],
-                 source_noise=None):
+                 earlystopper=None, dropout=[0.3], attention_dropout=[0.1],
+                 dropout_steps=[0]):
         # Basic attributes.
+
         self.model = model
         self.train_loss = train_loss
         self.valid_loss = valid_loss
+
+        self.scoring_preparator = scoring_preparator
+        self.train_scorers = train_scorers
+        self.valid_scorers = valid_scorers
         self.optim = optim
         self.trunc_size = trunc_size
         self.shard_size = shard_size
@@ -143,6 +145,7 @@ class Trainer(object):
         self.gpu_rank = gpu_rank
         self.gpu_verbose_level = gpu_verbose_level
         self.report_manager = report_manager
+        self.train_eval_steps = train_eval_steps
         self.with_align = with_align
         self.model_saver = model_saver
         self.average_decay = average_decay
@@ -151,8 +154,8 @@ class Trainer(object):
         self.model_dtype = model_dtype
         self.earlystopper = earlystopper
         self.dropout = dropout
+        self.attention_dropout = attention_dropout
         self.dropout_steps = dropout_steps
-        self.source_noise = source_noise
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -164,6 +167,16 @@ class Trainer(object):
         # Set model in training mode.
         self.model.train()
 
+    def training_eval_handler(self, scorer, batch, mode="train"):
+        """Trigger metrics calculations"""
+        preds, texts_ref = self.scoring_preparator.translate(
+            model=self.model,
+            batch=batch,
+            gpu_rank=self.gpu_rank,
+            step=self.optim.training_step,
+            mode=mode)
+        return scorer.compute_score(preds, texts_ref)
+
     def _accum_count(self, step):
         for i in range(len(self.accum_steps)):
             if step > self.accum_steps[i]:
@@ -173,9 +186,11 @@ class Trainer(object):
     def _maybe_update_dropout(self, step):
         for i in range(len(self.dropout_steps)):
             if step > 1 and step == self.dropout_steps[i] + 1:
-                self.model.update_dropout(self.dropout[i])
-                logger.info("Updated dropout to %f from step %d"
-                            % (self.dropout[i], step))
+                self.model.update_dropout(self.dropout[i],
+                                          self.attention_dropout[i])
+                logger.info("Updated dropout/attn dropout to %f %f at step %d"
+                            % (self.dropout[i],
+                               self.attention_dropout[i], step))
 
     def _accum_batches(self, iterator):
         batches = []
@@ -204,7 +219,7 @@ class Trainer(object):
             self.moving_average = copy_params
         else:
             average_decay = max(self.average_decay,
-                                1 - (step + 1)/(step + 10))
+                                1 - (step + 1) / (step + 10))
             for (i, avg), cpt in zip(enumerate(self.moving_average),
                                      self.model.parameters()):
                 self.moving_average[i] = \
@@ -228,7 +243,6 @@ class Trainer(object):
               iterations.
             valid_iter: A generator that returns the next validation batch.
             valid_steps: Run evaluation every this many iterations.
-
         Returns:
             The gathered statistics.
         """
@@ -272,16 +286,14 @@ class Trainer(object):
                 self.optim.learning_rate(),
                 report_stats)
 
-            if valid_iter is not None and step % valid_steps == 0:
+            if (valid_iter is not None and step % valid_steps == 0 and
+                    self.gpu_rank == 0):
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: validate step %d'
                                 % (self.gpu_rank, step))
+
                 valid_stats = self.validate(
                     valid_iter, moving_average=self.moving_average)
-                if self.gpu_verbose_level > 0:
-                    logger.info('GpuRank %d: gather valid stat \
-                                step %d' % (self.gpu_rank, step))
-                valid_stats = self._maybe_gather_stats(valid_stats)
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: report stat step %d'
                                 % (self.gpu_rank, step))
@@ -292,11 +304,12 @@ class Trainer(object):
                     self.earlystopper(valid_stats, step)
                     # If the patience has reached the limit, stop training
                     if self.earlystopper.has_stopped():
+                        logger.info("earlystopper has_stopped!")
                         break
 
             if (self.model_saver is not None
-                and (save_checkpoint_steps != 0
-                     and step % save_checkpoint_steps == 0)):
+                    and (save_checkpoint_steps != 0
+                         and step % save_checkpoint_steps == 0)):
                 self.model_saver.save(step, moving_average=self.moving_average)
 
             if train_steps > 0 and step >= train_steps:
@@ -331,18 +344,44 @@ class Trainer(object):
 
             for batch in valid_iter:
                 src, src_lengths = batch.src if isinstance(batch.src, tuple) \
-                                   else (batch.src, None)
+                    else (batch.src, None)
                 tgt = batch.tgt
 
-                # F-prop through the model.
-                outputs, attns = valid_model(src, tgt, src_lengths,
-                                             with_align=self.with_align)
+                with torch.cuda.amp.autocast(enabled=self.optim.amp):
+                    # F-prop through the model.
+                    outputs, attns = valid_model(src, tgt, src_lengths,
+                                                 with_align=self.with_align)
 
-                # Compute loss.
-                _, batch_stats = self.valid_loss(batch, outputs, attns)
+                    # Compute loss.
+                    _, batch_stats = self.valid_loss(batch, outputs, attns)
+
+                    stats.update(batch_stats)
+
+            # Compute validation metrics (at batch.dataset level)
+            computed_metrics = {}
+            for i, metric in enumerate(self.valid_scorers):
+                logger.info("UPDATING VALIDATION {}".format(metric))
+                self.valid_scorers[
+                    metric]["value"] = self.training_eval_handler(
+                        scorer=self.valid_scorers[metric]["scorer"],
+                        batch=batch,
+                        mode="valid")
+                computed_metrics[
+                    metric] = self.valid_scorers[metric]["value"]
+                logger.info(
+                    "validation {}: {}".format(
+                        metric, self.valid_scorers[metric]["value"])
+                        )
+                # Compute stats
+                batch_stats = onmt.utils.Statistics(
+                    batch_stats.loss,
+                    batch_stats.n_words,
+                    batch_stats.n_correct,
+                    computed_metrics)
 
                 # Update statistics.
                 stats.update(batch_stats)
+
         if moving_average:
             for param_data, param in zip(model_params_data,
                                          self.model.parameters()):
@@ -366,8 +405,6 @@ class Trainer(object):
             else:
                 trunc_size = target_size
 
-            batch = self.maybe_noise_source(batch)
-
             src, src_lengths = batch.src if isinstance(batch.src, tuple) \
                 else (batch.src, None)
             if src_lengths is not None:
@@ -376,7 +413,7 @@ class Trainer(object):
             tgt_outer = batch.tgt
 
             bptt = False
-            for j in range(0, target_size-1, trunc_size):
+            for j in range(0, target_size - 1, trunc_size):
                 # 1. Create truncated target.
                 tgt = tgt_outer[j: j + trunc_size]
 
@@ -384,20 +421,45 @@ class Trainer(object):
                 if self.accum_count == 1:
                     self.optim.zero_grad()
 
-                outputs, attns = self.model(src, tgt, src_lengths, bptt=bptt,
-                                            with_align=self.with_align)
-                bptt = True
-
-                # 3. Compute loss.
                 try:
-                    loss, batch_stats = self.train_loss(
-                        batch,
-                        outputs,
-                        attns,
-                        normalization=normalization,
-                        shard_size=self.shard_size,
-                        trunc_start=j,
-                        trunc_size=trunc_size)
+                    with torch.cuda.amp.autocast(enabled=self.optim.amp):
+                        outputs, attns = self.model(
+                            src, tgt, src_lengths, bptt=bptt,
+                            with_align=self.with_align)
+                        bptt = True
+
+                        # 3. Compute loss.
+                        loss, batch_stats = self.train_loss(
+                            batch,
+                            outputs,
+                            attns,
+                            normalization=normalization,
+                            shard_size=self.shard_size,
+                            trunc_start=j,
+                            trunc_size=trunc_size)
+
+                    step = self.optim.training_step
+                    if (
+                            step % self.train_eval_steps == 0 and
+                            self.n_gpu > 0
+                    ):
+                        # Compute and save stats
+                        computed_metrics = {}
+                        for i, metric in enumerate(self.train_scorers):
+                            logger.info("UPDATING TRAINING {}".format(metric))
+                            self.train_scorers[
+                                metric]["value"] = self.training_eval_handler(
+                                scorer=self.train_scorers[
+                                    metric]["scorer"],
+                                batch=batch,
+                                mode="train")
+                            logger.info(
+                                "training {}: {}".format(
+                                    metric, self.train_scorers[
+                                        metric]["value"]))
+                            computed_metrics[
+                                metric] = self.train_scorers[metric]["value"]
+                        batch_stats.computed_metrics = computed_metrics
 
                     if loss is not None:
                         self.optim.backward(loss)
@@ -405,10 +467,14 @@ class Trainer(object):
                     total_stats.update(batch_stats)
                     report_stats.update(batch_stats)
 
-                except Exception:
-                    traceback.print_exc()
-                    logger.info("At step %d, we removed a batch - accum %d",
-                                self.optim.training_step, k)
+                except Exception as exc:
+                    trace_content = traceback.format_exc()
+                    if "CUDA out of memory" in trace_content:
+                        logger.info("Step %d, cuda OOM - batch removed",
+                                    self.optim.training_step)
+                    else:
+                        traceback.print_exc()
+                        raise exc
 
                 # 4. Update the parameters and statistics.
                 if self.accum_count == 1:
@@ -472,7 +538,12 @@ class Trainer(object):
         """
         if self.report_manager is not None:
             return self.report_manager.report_training(
-                step, num_steps, learning_rate, report_stats,
+                step,
+                num_steps,
+                learning_rate,
+                None if self.earlystopper is None
+                else self.earlystopper.current_tolerance,
+                report_stats,
                 multigpu=self.n_gpu > 1)
 
     def _report_step(self, learning_rate, step, train_stats=None,
@@ -483,10 +554,8 @@ class Trainer(object):
         """
         if self.report_manager is not None:
             return self.report_manager.report_step(
-                learning_rate, step, train_stats=train_stats,
+                learning_rate,
+                None if self.earlystopper is None
+                else self.earlystopper.current_tolerance,
+                step, train_stats=train_stats,
                 valid_stats=valid_stats)
-
-    def maybe_noise_source(self, batch):
-        if self.source_noise is not None:
-            return self.source_noise(batch)
-        return batch
