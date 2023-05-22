@@ -2,6 +2,7 @@
 
 import torch
 from itertools import accumulate
+from onmt.constants import SubwordMarker
 
 
 def make_batch_align_matrix(index_tensor, size=None, normalize=False):
@@ -83,31 +84,35 @@ def build_align_pharaoh(valid_alignment):
     return align_pairs
 
 
-def to_word_align(src, tgt, subword_align, mode):
+def to_word_align(src, tgt, subword_align, m_src='joiner', m_tgt='joiner'):
     """Convert subword alignment to word alignment.
 
     Args:
         src (string): tokenized sentence in source language.
         tgt (string): tokenized sentence in target language.
         subword_align (string): align_pharaoh correspond to src-tgt.
-        mode (string): tokenization mode used by src and tgt,
-            choose from ["joiner", "spacer"].
+        m_src (string): tokenization mode used in src,
+            can be ["joiner", "spacer"].
+        m_tgt (string): tokenization mode used in tgt,
+            can be ["joiner", "spacer"].
 
     Returns:
         word_align (string): converted alignments correspand to
             detokenized src-tgt.
     """
+    assert m_src in ["joiner", "spacer"], "Invalid value for argument m_src!"
+    assert m_tgt in ["joiner", "spacer"], "Invalid value for argument m_tgt!"
+
     src, tgt = src.strip().split(), tgt.strip().split()
     subword_align = {(int(a), int(b)) for a, b in (x.split("-")
                      for x in subword_align.split())}
-    if mode == 'joiner':
-        src_map = subword_map_by_joiner(src, marker='￭')
-        tgt_map = subword_map_by_joiner(tgt, marker='￭')
-    elif mode == 'spacer':
-        src_map = subword_map_by_spacer(src, marker='▁')
-        tgt_map = subword_map_by_spacer(tgt, marker='▁')
-    else:
-        raise ValueError("Invalid value for argument mode!")
+
+    src_map = (subword_map_by_spacer(src) if m_src == 'spacer'
+               else subword_map_by_joiner(src))
+
+    tgt_map = (subword_map_by_spacer(src) if m_tgt == 'spacer'
+               else subword_map_by_joiner(src))
+
     word_align = list({"{}-{}".format(src_map[a], tgt_map[b])
                        for a, b in subword_align})
     word_align.sort(key=lambda x: int(x.split('-')[-1]))  # sort by tgt_id
@@ -115,25 +120,92 @@ def to_word_align(src, tgt, subword_align, mode):
     return " ".join(word_align)
 
 
-def subword_map_by_joiner(subwords, marker='￭'):
+# Helper functions
+def begin_uppercase(token):
+    return token == SubwordMarker.BEGIN_UPPERCASE
+
+
+def end_uppercase(token):
+    return token == SubwordMarker.END_UPPERCASE
+
+
+def begin_case(token):
+    return token == SubwordMarker.BEGIN_CASED
+
+
+def case_markup(token):
+    return begin_uppercase(token) \
+        or end_uppercase(token) \
+        or begin_case(token)
+
+
+def subword_map_by_joiner(subwords,
+                          original_subwords=None,
+                          marker=SubwordMarker.JOINER):
     """Return word id for each subword token (annotate by joiner)."""
-    flags = [0] * len(subwords)
+
+    flags = [1] * len(subwords)
+    j = 0
+    finished = True
     for i, tok in enumerate(subwords):
-        if tok.endswith(marker):
-            flags[i] = 1
-        if tok.startswith(marker):
-            assert i >= 1 and flags[i-1] != 1, \
-                "Sentence `{}` not correct!".format(" ".join(subwords))
-            flags[i-1] = 1
-    marker_acc = list(accumulate([0] + flags[:-1]))
-    word_group = [(i - maker_sofar) for i, maker_sofar
-                  in enumerate(marker_acc)]
+
+        previous_tok = subwords[i-1] if i else ""  # Previous N-1 token
+        previous_tok_2 = subwords[i-2] if i > 1 else ""  # Previous N-2 token
+        # Keeps track of the original words/subwords
+        # ('prior_tokenization' option)
+        current_original_subword = "" if not original_subwords \
+            else original_subwords[j] if j < len(original_subwords) else ""
+
+        if tok.startswith(marker) and tok != current_original_subword:
+            flags[i] = 0
+        elif (previous_tok.endswith(marker)
+                or begin_case(previous_tok)
+                or begin_uppercase(previous_tok)) \
+                and not finished:
+            flags[i] = 0
+        elif previous_tok_2.endswith(marker) \
+                and case_markup(previous_tok) \
+                and not finished:
+            flags[i] = 0
+        elif end_uppercase(tok) and tok != current_original_subword:
+            flags[i] = 0
+        else:
+            finished = False
+            if tok == current_original_subword:
+                finished = True
+            j += 1
+
+    flags[0] = 0
+    word_group = list(accumulate(flags))
+
+    if original_subwords:
+        assert max(word_group) < len(original_subwords)
     return word_group
 
 
-def subword_map_by_spacer(subwords, marker='▁'):
+def subword_map_by_spacer(subwords, marker=SubwordMarker.SPACER):
     """Return word id for each subword token (annotate by spacer)."""
-    word_group = list(accumulate([int(marker in x) for x in subwords]))
+    flags = [0] * len(subwords)
+    for i, tok in enumerate(subwords):
+        if marker in tok:
+            if case_markup(tok.replace(marker, "")):
+                if i < len(subwords)-1:
+                    flags[i] = 1
+            else:
+                if i > 0:
+                    previous = subwords[i-1].replace(marker, "")
+                    if not case_markup(previous):
+                        flags[i] = 1
+
+    # In case there is a final case_markup when new_spacer is on
+    for i in range(1, len(subwords)-1):
+        if case_markup(subwords[-i]):
+            flags[-i] = 0
+        elif subwords[-i] == marker:
+            flags[-i] = 0
+            break
+
+    word_group = list(accumulate(flags))
     if word_group[0] == 1:  # when dummy prefix is set
         word_group = [item - 1 for item in word_group]
     return word_group

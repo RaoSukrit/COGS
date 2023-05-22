@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 """REST Translation server."""
-from __future__ import print_function
 import codecs
 import sys
 import os
@@ -13,15 +12,19 @@ import importlib
 import torch
 import onmt.opts
 
-from itertools import islice
+from itertools import islice, zip_longest
 from copy import deepcopy
+from collections import defaultdict
+from argparse import Namespace
 
+from onmt.constants import DefaultTokens
 from onmt.utils.logging import init_logger
 from onmt.utils.misc import set_random_seed
 from onmt.utils.misc import check_model_config
 from onmt.utils.alignment import to_word_align
 from onmt.utils.parse import ArgumentParser
 from onmt.translate.translator import build_translator
+from onmt.transforms.features import InferFeatsTransform
 
 
 def critical(func):
@@ -80,19 +83,15 @@ class CTranslate2Translator(object):
     reproduce the onmt.translate.translator API.
     """
 
-    def __init__(self, model_path, device, device_index,
-                 batch_size, beam_size, n_best, preload=False):
+    def __init__(self, model_path, ct2_translator_args,
+                 ct2_translate_batch_args, target_prefix=False,
+                 preload=False):
         import ctranslate2
         self.translator = ctranslate2.Translator(
             model_path,
-            device=device,
-            device_index=device_index,
-            inter_threads=1,
-            intra_threads=1,
-            compute_type="default")
-        self.batch_size = batch_size
-        self.beam_size = beam_size
-        self.n_best = n_best
+            **ct2_translator_args)
+        self.ct2_translate_batch_args = ct2_translate_batch_args
+        self.target_prefix = target_prefix
         if preload:
             # perform a first request to initialize everything
             dummy_translation = self.translate(["a"])
@@ -101,13 +100,57 @@ class CTranslate2Translator(object):
             time.sleep(1)
             self.translator.unload_model(to_cpu=True)
 
-    def translate(self, texts_to_translate, batch_size=8):
+    @staticmethod
+    def convert_onmt_to_ct2_opts(ct2_translator_args,
+                                 ct2_translate_batch_args, opt):
+
+        def setdefault_if_exists_must_match(obj, name, value):
+            if name in obj:
+                assert value == obj[name], f"{name} is different in"\
+                    " OpenNMT-py config and in CTranslate2 config"\
+                    f" ({value} vs {obj[name]})"
+            else:
+                obj.setdefault(name, value)
+
+        default_for_translator = {
+            "inter_threads": 1,
+            "intra_threads": torch.get_num_threads(),
+            "compute_type": "default",
+        }
+        for name, value in default_for_translator.items():
+            ct2_translator_args.setdefault(name, value)
+
+        onmt_for_translator = {
+            "device": "cuda" if opt.cuda else "cpu",
+            "device_index": opt.gpu if opt.cuda else 0,
+        }
+        for name, value in onmt_for_translator.items():
+            setdefault_if_exists_must_match(
+                ct2_translator_args, name, value)
+
+        onmt_for_translate_batch_enforce = {
+            "beam_size": opt.beam_size,
+            "max_batch_size": opt.batch_size,
+            "num_hypotheses": opt.n_best,
+            "max_decoding_length": opt.max_length,
+            "min_decoding_length": opt.min_length,
+        }
+        for name, value in onmt_for_translate_batch_enforce.items():
+            setdefault_if_exists_must_match(
+                ct2_translate_batch_args, name, value)
+
+    def translate(self, texts_to_translate, batch_size=8,
+                  tgt=None, src_feats=None):
+        assert (src_feats is None) or (src_feats == {}), \
+            "CTranslate2 does not support source features"
         batch = [item.split(" ") for item in texts_to_translate]
+        if tgt is not None:
+            tgt = [item.split(" ") for item in tgt]
         preds = self.translator.translate_batch(
             batch,
-            max_batch_size=self.batch_size,
-            beam_size=self.beam_size,
-            num_hypotheses=self.n_best
+            target_prefix=tgt if self.target_prefix else None,
+            return_scores=True,
+            **self.ct2_translate_batch_args
         )
         scores = [[item["score"] for item in ex] for ex in preds]
         predictions = [[" ".join(item["tokens"]) for item in ex]
@@ -147,9 +190,15 @@ class TranslationServer(object):
                       'preprocess_opt': conf.get('preprocess', None),
                       'tokenizer_opt': conf.get('tokenizer', None),
                       'postprocess_opt': conf.get('postprocess', None),
+                      'custom_opt': conf.get('custom_opt', None),
                       'on_timeout': conf.get('on_timeout', None),
                       'model_root': conf.get('model_root', self.models_root),
-                      'ct2_model': conf.get('ct2_model', None)
+                      'ct2_model': conf.get('ct2_model', None),
+                      'ct2_translator_args': conf.get('ct2_translator_args',
+                                                      {}),
+                      'ct2_translate_batch_args': conf.get(
+                          'ct2_translate_batch_args', {}),
+                      'features_opt': conf.get('features', None)
                       }
             kwargs = {k: v for (k, v) in kwargs.items() if v is not None}
             model_id = conf.get("id", None)
@@ -241,10 +290,10 @@ class ServerModel(object):
         opt (dict): Options for the Translator
         model_id (int): Model ID
         preprocess_opt (list): Options for preprocess processus or None
-                               (extend for CJK)
         tokenizer_opt (dict): Options for the tokenizer or None
         postprocess_opt (list): Options for postprocess processus or None
-                                (extend for CJK)
+        custom_opt (dict): Custom options, can be used within preprocess or
+            postprocess, default None
         load (bool): whether to load the model during :func:`__init__()`
         timeout (int): Seconds before running :func:`do_timeout()`
             Negative values means no timeout
@@ -255,24 +304,31 @@ class ServerModel(object):
     """
 
     def __init__(self, opt, model_id, preprocess_opt=None, tokenizer_opt=None,
-                 postprocess_opt=None, load=False, timeout=-1,
-                 on_timeout="to_cpu", model_root="./", ct2_model=None):
+                 postprocess_opt=None, custom_opt=None, load=False, timeout=-1,
+                 on_timeout="to_cpu", model_root="./", ct2_model=None,
+                 ct2_translator_args=None, ct2_translate_batch_args=None,
+                 features_opt=None):
         self.model_root = model_root
         self.opt = self.parse_opt(opt)
+        self.custom_opt = custom_opt
 
         self.model_id = model_id
         self.preprocess_opt = preprocess_opt
-        self.tokenizer_opt = tokenizer_opt
+        self.tokenizers_opt = tokenizer_opt
+        self.features_opt = features_opt
         self.postprocess_opt = postprocess_opt
         self.timeout = timeout
         self.on_timeout = on_timeout
 
         self.ct2_model = os.path.join(model_root, ct2_model) \
             if ct2_model is not None else None
+        self.ct2_translator_args = ct2_translator_args
+        self.ct2_translate_batch_args = ct2_translate_batch_args
 
         self.unload_timer = None
         self.user_opt = opt
-        self.tokenizer = None
+        self.tokenizers = None
+        self.feats_transform = None
 
         if len(self.opt.log_file) > 0:
             log_file = os.path.join(model_root, self.opt.log_file)
@@ -296,43 +352,28 @@ class ServerModel(object):
                 function = get_function_by_path(function_path)
                 self.preprocessor.append(function)
 
-        if self.tokenizer_opt is not None:
-            self.logger.info("Loading tokenizer")
-
-            if "type" not in self.tokenizer_opt:
-                raise ValueError(
-                    "Missing mandatory tokenizer option 'type'")
-
-            if self.tokenizer_opt['type'] == 'sentencepiece':
-                if "model" not in self.tokenizer_opt:
-                    raise ValueError(
-                        "Missing mandatory tokenizer option 'model'")
-                import sentencepiece as spm
-                sp = spm.SentencePieceProcessor()
-                model_path = os.path.join(self.model_root,
-                                          self.tokenizer_opt['model'])
-                sp.Load(model_path)
-                self.tokenizer = sp
-            elif self.tokenizer_opt['type'] == 'pyonmttok':
-                if "params" not in self.tokenizer_opt:
-                    raise ValueError(
-                        "Missing mandatory tokenizer option 'params'")
-                import pyonmttok
-                if self.tokenizer_opt["mode"] is not None:
-                    mode = self.tokenizer_opt["mode"]
-                else:
-                    mode = None
-                # load can be called multiple times: modify copy
-                tokenizer_params = dict(self.tokenizer_opt["params"])
-                for key, value in self.tokenizer_opt["params"].items():
-                    if key.endswith("path"):
-                        tokenizer_params[key] = os.path.join(
-                            self.model_root, value)
-                tokenizer = pyonmttok.Tokenizer(mode,
-                                                **tokenizer_params)
-                self.tokenizer = tokenizer
+        if self.tokenizers_opt is not None:
+            if "src" in self.tokenizers_opt and "tgt" in self.tokenizers_opt:
+                self.logger.info("Loading src & tgt tokenizer")
+                self.tokenizers = {
+                    'src': self.build_tokenizer(tokenizer_opt['src']),
+                    'tgt': self.build_tokenizer(tokenizer_opt['tgt'])
+                }
             else:
-                raise ValueError("Invalid value for tokenizer type")
+                self.logger.info("Loading tokenizer")
+                self.tokenizers_opt = {
+                    'src': tokenizer_opt,
+                    'tgt': tokenizer_opt
+                }
+                tokenizer = self.build_tokenizer(tokenizer_opt)
+                self.tokenizers = {
+                    'src': tokenizer,
+                    'tgt': tokenizer
+                }
+
+        if self.features_opt is not None:
+            self.feats_transform = InferFeatsTransform(
+                Namespace(**self.features_opt))
 
         if self.postprocess_opt is not None:
             self.logger.info("Loading postprocessor")
@@ -397,13 +438,14 @@ class ServerModel(object):
 
         try:
             if self.ct2_model is not None:
+                CTranslate2Translator.convert_onmt_to_ct2_opts(
+                    self.ct2_translator_args, self.ct2_translate_batch_args,
+                    self.opt)
                 self.translator = CTranslate2Translator(
                     self.ct2_model,
-                    device="cuda" if self.opt.cuda else "cpu",
-                    device_index=self.opt.gpu if self.opt.cuda else 0,
-                    batch_size=self.opt.batch_size,
-                    beam_size=self.opt.beam_size,
-                    n_best=self.opt.n_best,
+                    ct2_translator_args=self.ct2_translator_args,
+                    ct2_translate_batch_args=self.ct2_translate_batch_args,
+                    target_prefix=self.opt.tgt_prefix,
                     preload=preload)
             else:
                 self.translator = build_translator(
@@ -455,7 +497,6 @@ class ServerModel(object):
         texts = []
         head_spaces = []
         tail_spaces = []
-        sslength = []
         all_preprocessed = []
         for i, inp in enumerate(inputs):
             src = inp['src']
@@ -468,23 +509,41 @@ class ServerModel(object):
                 whitespaces_after = match_after.group(0)
             head_spaces.append(whitespaces_before)
             # every segment becomes a dict for flexibility purposes
-            seg_dict = self.maybe_preprocess(src.strip())
+            seg_dict = self.maybe_preprocess(inp)
             all_preprocessed.append(seg_dict)
-            for seg in seg_dict["seg"]:
+            for seg, ref, feats in zip_longest(
+                    seg_dict["seg"], seg_dict["ref"],
+                    seg_dict["src_feats"]):
                 tok = self.maybe_tokenize(seg)
-                texts.append(tok)
-            sslength.append(len(tok.split()))
+                if ref is not None:
+                    ref = self.maybe_tokenize(ref, side='tgt')
+                inferred_feats = self.transform_feats(seg, tok, feats)
+                texts.append((tok, ref, inferred_feats))
             tail_spaces.append(whitespaces_after)
 
-        empty_indices = [i for i, x in enumerate(texts) if x == ""]
-        texts_to_translate = [x for x in texts if x != ""]
+        empty_indices = []
+        texts_to_translate, texts_ref = [], []
+        texts_features = defaultdict(list)
+        for i, (tok, ref_tok, feats) in enumerate(texts):
+            if tok == "":
+                empty_indices.append(i)
+            else:
+                texts_to_translate.append(tok)
+                texts_ref.append(ref_tok)
+                for feat_name, feat_values in feats.items():
+                    texts_features[feat_name].append(feat_values)
+        if any([item is None for item in texts_ref]):
+            texts_ref = None
 
         scores = []
         predictions = []
+
         if len(texts_to_translate) > 0:
             try:
                 scores, predictions = self.translator.translate(
                     texts_to_translate,
+                    src_feats=texts_features,
+                    tgt=texts_ref,
                     batch_size=len(texts_to_translate)
                     if self.opt.batch_size == 0
                     else self.opt.batch_size)
@@ -519,12 +578,12 @@ class ServerModel(object):
                    for result, src in zip(results, tiled_texts)]
 
         aligns = [align for _, align in results]
+        results = [tokens for tokens, _ in results]
 
         # build back results with empty texts
         for i in empty_indices:
             j = i * self.opt.n_best
-            results = (results[:j] +
-                       [("", None)] * self.opt.n_best + results[j:])
+            results = results[:j] + [""] * self.opt.n_best + results[j:]
             aligns = aligns[:j] + [None] * self.opt.n_best + aligns[j:]
             scores = scores[:j] + [0] * self.opt.n_best + scores[j:]
 
@@ -552,22 +611,20 @@ class ServerModel(object):
         avg_scores = []
         merged_aligns = []
         for i, seg_dict in enumerate(all_preprocessed):
-            sub_results = results[n_best * offset:
-                                  (offset + seg_dict["n_seg"]) * n_best]
-            sub_scores = scores[n_best * offset:
-                                (offset + seg_dict["n_seg"]) * n_best]
-            sub_aligns = aligns[n_best * offset:
-                                (offset + seg_dict["n_seg"]) * n_best]
+            n_seg = seg_dict["n_seg"]
+            sub_results = results[n_best * offset: (offset + n_seg) * n_best]
+            sub_scores = scores[n_best * offset: (offset + n_seg) * n_best]
+            sub_aligns = aligns[n_best * offset: (offset + n_seg) * n_best]
             for j in range(n_best):
                 _seg_dict = deepcopy(seg_dict)
-                _sub_segs = list(list(zip(*sub_results))[0])
-                _seg_dict["seg"] = list(islice(_sub_segs, j, None, n_best))
+                _seg_dict["seg"] = list(islice(sub_results, j, None, n_best))
                 rebuilt_segs.append(_seg_dict)
                 sub_sub_scores = list(islice(sub_scores, j, None, n_best))
-                avg_scores.append(sum(sub_sub_scores)/_seg_dict["n_seg"])
+                avg_score = sum(sub_sub_scores)/n_seg if n_seg != 0 else 0
+                avg_scores.append(avg_score)
                 sub_sub_aligns = list(islice(sub_aligns, j, None, n_best))
                 merged_aligns.append(sub_sub_aligns)
-            offset += _seg_dict["n_seg"]
+            offset += n_seg
         return rebuilt_segs, avg_scores, merged_aligns
 
     def do_timeout(self):
@@ -615,8 +672,8 @@ class ServerModel(object):
              "loaded": self.loaded,
              "timeout": self.timeout,
              }
-        if self.tokenizer_opt is not None:
-            d["tokenizer"] = self.tokenizer_opt
+        if self.tokenizers_opt is not None:
+            d["tokenizer"] = self.tokenizers_opt
         return d
 
     @critical
@@ -641,11 +698,13 @@ class ServerModel(object):
         """Preprocess the sequence (or not)
 
         """
-        if type(sequence) is str:
-            sequence = {
-                "seg": [sequence],
-                "n_seg": 1
-            }
+        if sequence.get("src", None) is not None:
+            sequence = deepcopy(sequence)
+            sequence["seg"] = [sequence["src"].strip()]
+            sequence.pop("src")
+            sequence["ref"] = [sequence.get('ref', None)]
+            sequence["src_feats"] = [sequence.get('src_feats', {})]
+            sequence["n_seg"] = 1
         if self.preprocess_opt is not None:
             return self.preprocess(sequence)
         return sequence
@@ -665,17 +724,70 @@ class ServerModel(object):
             sequence = function(sequence, self)
         return sequence
 
-    def maybe_tokenize(self, sequence):
+    def transform_feats(self, raw_src, tok_src, feats):
+        """Apply InferFeatsTransform to features"""
+        if self.feats_transform is None:
+            return feats
+        ex = {
+            "src": tok_src.split(' '),
+            "src_original": raw_src.split(' '),
+            "src_feats": {k:  v.split(' ') for k, v in feats.items()}
+        }
+        transformed_ex = self.feats_transform.apply(ex)
+        if not transformed_ex:
+            raise Exception("Error inferring feats")
+        transformed_feats = dict()
+        for feat_name, feat_values in transformed_ex["src_feats"].items():
+            transformed_feats[feat_name] = " ".join(feat_values)
+        return transformed_feats
+
+    def build_tokenizer(self, tokenizer_opt):
+        """Build tokenizer described by `tokenizer_opt`."""
+        if "type" not in tokenizer_opt:
+            raise ValueError(
+                "Missing mandatory tokenizer option 'type'")
+
+        if tokenizer_opt['type'] == 'sentencepiece':
+            if "model" not in tokenizer_opt:
+                raise ValueError(
+                    "Missing mandatory tokenizer option 'model'")
+            import sentencepiece as spm
+            tokenizer = spm.SentencePieceProcessor()
+            model_path = os.path.join(self.model_root,
+                                      tokenizer_opt['model'])
+            tokenizer.Load(model_path)
+        elif tokenizer_opt['type'] == 'pyonmttok':
+            if "params" not in tokenizer_opt:
+                raise ValueError(
+                    "Missing mandatory tokenizer option 'params'")
+            import pyonmttok
+            if tokenizer_opt["mode"] is not None:
+                mode = tokenizer_opt["mode"]
+            else:
+                mode = None
+            # load can be called multiple times: modify copy
+            tokenizer_params = dict(tokenizer_opt["params"])
+            for key, value in tokenizer_opt["params"].items():
+                if key.endswith("path"):
+                    tokenizer_params[key] = os.path.join(
+                        self.model_root, value)
+            tokenizer = pyonmttok.Tokenizer(mode,
+                                            **tokenizer_params)
+        else:
+            raise ValueError("Invalid value for tokenizer type")
+        return tokenizer
+
+    def maybe_tokenize(self, sequence, side='src'):
         """Tokenize the sequence (or not).
 
         Same args/returns as `tokenize`
         """
 
-        if self.tokenizer_opt is not None:
-            return self.tokenize(sequence)
+        if self.tokenizers_opt is not None:
+            return self.tokenize(sequence, side)
         return sequence
 
-    def tokenize(self, sequence):
+    def tokenize(self, sequence, side='src'):
         """Tokenize a single sequence.
 
         Args:
@@ -685,33 +797,34 @@ class ServerModel(object):
             tok (str): The tokenized sequence.
         """
 
-        if self.tokenizer is None:
+        if self.tokenizers is None:
             raise ValueError("No tokenizer loaded")
 
-        if self.tokenizer_opt["type"] == "sentencepiece":
-            tok = self.tokenizer.EncodeAsPieces(sequence)
+        if self.tokenizers_opt[side]["type"] == "sentencepiece":
+            tok = self.tokenizers[side].EncodeAsPieces(sequence)
             tok = " ".join(tok)
-        elif self.tokenizer_opt["type"] == "pyonmttok":
-            tok, _ = self.tokenizer.tokenize(sequence)
+        elif self.tokenizers_opt[side]["type"] == "pyonmttok":
+            tok, _ = self.tokenizers[side].tokenize(sequence)
             tok = " ".join(tok)
         return tok
 
-    @property
-    def tokenizer_marker(self):
+    def tokenizer_marker(self, side='src'):
+        """Return marker used in `side` tokenizer."""
         marker = None
-        tokenizer_type = self.tokenizer_opt.get('type', None)
-        if tokenizer_type == "pyonmttok":
-            params = self.tokenizer_opt.get('params', None)
-            if params is not None:
-                if params.get("joiner_annotate", None) is not None:
-                    marker = 'joiner'
-                elif params.get("spacer_annotate", None) is not None:
-                    marker = 'spacer'
-        elif tokenizer_type == "sentencepiece":
-            marker = 'spacer'
+        if self.tokenizers_opt is not None:
+            tokenizer_type = self.tokenizers_opt[side].get('type', None)
+            if tokenizer_type == "pyonmttok":
+                params = self.tokenizers_opt[side].get('params', None)
+                if params is not None:
+                    if params.get("joiner_annotate", None) is not None:
+                        marker = 'joiner'
+                    elif params.get("spacer_annotate", None) is not None:
+                        marker = 'spacer'
+            elif tokenizer_type == "sentencepiece":
+                marker = 'spacer'
         return marker
 
-    def maybe_detokenize_with_align(self, sequence, src):
+    def maybe_detokenize_with_align(self, sequence, src, side='tgt'):
         """De-tokenize (or not) the sequence (with alignment).
 
         Args:
@@ -726,35 +839,35 @@ class ServerModel(object):
         align = None
         if self.opt.report_align:
             # output contain alignment
-            sequence, align = sequence.split(' ||| ')
+            sequence, align = sequence.split(DefaultTokens.ALIGNMENT_SEPARATOR)
             if align != '':
                 align = self.maybe_convert_align(src, sequence, align)
-        sequence = self.maybe_detokenize(sequence)
+        sequence = self.maybe_detokenize(sequence, side)
         return (sequence, align)
 
-    def maybe_detokenize(self, sequence):
+    def maybe_detokenize(self, sequence, side='tgt'):
         """De-tokenize the sequence (or not)
 
         Same args/returns as :func:`tokenize()`
         """
 
-        if self.tokenizer_opt is not None and ''.join(sequence.split()) != '':
-            return self.detokenize(sequence)
+        if self.tokenizers_opt is not None and ''.join(sequence.split()) != '':
+            return self.detokenize(sequence, side)
         return sequence
 
-    def detokenize(self, sequence):
+    def detokenize(self, sequence, side='tgt'):
         """Detokenize a single sequence
 
         Same args/returns as :func:`tokenize()`
         """
 
-        if self.tokenizer is None:
+        if self.tokenizers is None:
             raise ValueError("No tokenizer loaded")
 
-        if self.tokenizer_opt["type"] == "sentencepiece":
-            detok = self.tokenizer.DecodePieces(sequence.split())
-        elif self.tokenizer_opt["type"] == "pyonmttok":
-            detok = self.tokenizer.detokenize(sequence.split())
+        if self.tokenizers_opt[side]["type"] == "sentencepiece":
+            detok = self.tokenizers[side].DecodePieces(sequence.split())
+        elif self.tokenizers_opt[side]["type"] == "pyonmttok":
+            detok = self.tokenizers[side].detokenize(sequence.split())
 
         return detok
 
@@ -769,8 +882,14 @@ class ServerModel(object):
         Returns:
             align (str): The alignment correspand to detokenized src/tgt.
         """
-        if self.tokenizer_marker is not None and ''.join(tgt.split()) != '':
-            return to_word_align(src, tgt, align, mode=self.tokenizer_marker)
+        if self.tokenizers_opt is not None:
+            src_marker = self.tokenizer_marker(side='src')
+            tgt_marker = self.tokenizer_marker(side='tgt')
+            if src_marker is None or tgt_marker is None:
+                raise ValueError("To get decoded alignment, joiner/spacer "
+                                 "should be used in both side's tokenizer.")
+            elif ''.join(tgt.split()) != '':
+                align = to_word_align(src, tgt, align, src_marker, tgt_marker)
         return align
 
     def maybe_postprocess(self, sequence):
