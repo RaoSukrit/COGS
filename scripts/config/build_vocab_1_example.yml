@@ -1,0 +1,25 @@
+## Where the samples will be written
+save_data: ../exp_data/1_example_attn_resample
+
+## Where the vocab(s) will be written
+src_vocab: ../exp_data/1_example_attn_resample_verify/1_example.vocab.src
+tgt_vocab: ../exp_data/1_example_attn_resample_verify/1_example.vocab.tgt
+
+# Prevent overwriting existing files in the folder
+overwrite: true
+
+# Corpus opts:
+data:
+    train:
+        path_src: ../exp_data/train_source.txt
+        path_tgt: ../exp_data/train_target.txt
+    valid:
+        path_src: ../exp_data/dev_source.txt
+        path_tgt: ../exp_data/dev_target.txt
+    test:
+        path_src: ../exp_data/test_source.txt
+        path_tgt: ../exp_data/test_target.txt
+    gen:
+        path_src: ../exp_data/gen_source.txt
+        path_tgt: ../exp_data/gen_target.txt
+...
