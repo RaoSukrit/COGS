@@ -4,6 +4,13 @@ __pycache__/
 *$py.class
 *.DS_Store
 
+# pytorch weights
+*.pt
+
+# Slurm log files
+*.err
+*.out
+
 # C extensions
 *.so
 
@@ -130,6 +137,3 @@ dmypy.json
 .pyre/
 
 
-*.pt
-*.err
-*.out
