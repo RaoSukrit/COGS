@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=comp_gen_uni_gru_new_vocab_no_leakage
+#SBATCH --job-name=seed_50_comp_gen_uni_lstm_new_vocab
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run_new_vocab/seed5_vocab_debugging_final_runs_%x_%j.out
-#SBATCH --error=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run_new_vocab/seed5_vocab_debugging_final_runs_%x_%j.err
+#SBATCH --output=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run_new_vocab/%x_%j.out
+#SBATCH --error=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run_new_vocab/%x_%j.err
 #SBATCH --export=ALL
 #SBATCH --time=10:00:00
 #SBATCH --gres=gpu:1
@@ -16,7 +16,8 @@ echo singularity exec --nv --bind /scratch --overlay /scratch/str8775/conda_sbac
 source /ext3/env.sh
 conda activate
 cd /scratch/str8775/conda_env/compositional-generalisation/COGS/scripts/
-bash run_gru_uni.sh ../exp_data ../src/OpenNMT-py ${SEED}
+bash run_lstm_uni.sh ../exp_data ../src/OpenNMT-py ${SEED}
+bash run_lstm_uni.sh ../exp_data ../src/OpenNMT-py ${SEED}
 "
 
 
@@ -24,6 +25,6 @@ singularity exec --nv --bind /scratch --overlay /scratch/str8775/conda_env/compo
 source /ext3/env.sh
 conda activate
 cd /scratch/str8775/conda_env/compositional-generalisation/COGS/scripts/
-bash run_gru_uni.sh ../exp_data ../src/OpenNMT-py ${SEED}
+bash run_lstm_uni.sh ../exp_data ../src/OpenNMT-py ${SEED}
 "
 

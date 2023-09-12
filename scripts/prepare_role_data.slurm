@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=comp_gen_cogs_train_gru_uni_att_hidden512_no_if_new_vocab_seed1
+#SBATCH --job-name=50_prepare_data
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run1/seed100_%x_%j.out
-#SBATCH --error=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run1/seed100_%x_%j.err
+#SBATCH --output=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run1/%x_%j.out
+#SBATCH --error=/scratch/str8775/conda_env/compositional-generalisation/COGS/exp/run1/%x_%j.err
 #SBATCH --export=ALL
 #SBATCH --time=10:00:00
 #SBATCH --gres=gpu:1
