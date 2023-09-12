@@ -1,0 +1,322 @@
+Compute Node:
+srun --nodes=1  --cpus-per-task=1 --mem=10GB --time=01:30:00  --pty /bin/bash
+sbatch --nodes=1  --cpus-per-task=1 --mem=64GB --time=03:30:00 --wrap "sleep infinity"
+
+With GPU
+srun --nodes=1 --tasks-per-node=1 --cpus-per-task=1 --gres=gpu:1 --mem=16GB --time=10:30:00 --pty /bin/bash
+sbatch --nodes=1 --tasks-per-node=1 --cpus-per-task=1 --gres=gpu:1 --mem=64GB --time=10:30:00 --wrap "sleep infinity"
+
+Singularity without GPU
+singularity exec --bind /scratch --overlay /scratch/str8775/conda_env/compositional-generalisation_env.ext3:rw /scratch/str8775/conda_env/cuda11.4.2-cudnn8.2.4-devel-ubuntu20.04.3.sif /bin/bash
+singularity exec --bind /scratch --overlay /scratch/str8775/conda_env/compositional-generalisation_env1.ext3:rw /scratch/work/public/singularity/cuda10.1-cudnn7-devel-ubuntu18.04.sif /bin/bash
+
+Singularity with GPU:
+singularity exec --nv --bind /scratch --overlay /scratch/str8775/conda_env/compositional-generalisation_env.ext3:rw /scratch/str8775/conda_env/cuda11.4.2-cudnn8.2.4-devel-ubuntu20.04.3.sif /bin/bash
+singularity exec --nv --bind /scratch --overlay /scratch/str8775/conda_env/compositional-generalisation_env2.ext3:rw /scratch/str8775/conda_env/cuda11.4.2-cudnn8.2.4-devel-ubuntu20.04.3.sif /bin/bash
+
+
+Training COGS Model using OpenNMT
+- cd COGS/scripts
+- make sure run_lstm_uni.sh is edited with correct hyper-params
+- bash ./run_lstm_uni.sh ../exp_data/ ../src/OpenNMT-py/
+
+Exporting trained COGS model for training ROLE
+- create new_script
+
+
+Training seq2seq SCAN model model using SCAN codebase
+- cd SCAN/
+- make sure to change following vals in train.py
+    dir_data = 'data/COGS/modified/'
+    dir_models = 'cogs_exp_models'
+    dir_results = 'cogs_exp_results'
+- make sure to change params in model_train.slurm
+- sbatch model_train.slurm
+
+Training ROLE model on seq2seq model (SCAN)
+- cd rldn
+- To generate training data
+    - change location to model dir in generate_vectors_cogs.py
+    - python3 generate_vectors_scan.py --model_prefix=model_uid --data_location=./data/cogs/ --hidden_size 512
+- For training from scratch run
+    -  python3 decompose.py --data_prefix=scan_simple_split_gru_hidden_100_dropout_0.1 \
+                            --test_decoder=True \
+                            --scan_checkpoint=./scan_models/scan_model_simple_gru_hidden_100_dropout_0.1.tar \
+                            --num_roles=50 \
+                            --filler_dim=100 \
+                            --role_dim=50 \
+                            --hidden_size=100 \
+                            --decoder_embedding_size=100 \
+                            --patience=10 \
+                            --output_dir=role_learning_model_simple_gru_hidden_100_dropout_0.1 \
+                            --role_learning \
+                            --bidirectional \
+                            --one_hot_regularization_weight=0.02 \
+                            --l2_norm_regularization_weight=0.02 \
+                            --unique_role_regularization_weight=0.02 \
+                            --role_assigner_num_layers=2 \
+                            --softmax_roles \
+                            --use_one_hot_temperature
+
+- For training from checkpoint run
+    - python3 decompose.py --data_prefix=scan_simple_splitcogs_exp_model_simple_gru_hidden_100_dropout_0.1 \
+                        --test_decoder=True \
+                        --scan_checkpoint=./cogs_exp_scan_models/cogs_exp_model_simple_gru_hidden_100_dropout_0.1.tar \
+                        --num_roles=50 \
+                        --filler_dim=100 \
+                        --role_dim=50 \
+                        --hidden_size=100 \
+                        --decoder_embedding_size=100 \
+                        --patience=10 \
+                        --output_dir=role_learning3_model_simple_gru_hidden_100_dropout_0.1 \
+                        --role_learning \
+                        --bidirectional \
+                        --one_hot_regularization_weight=0.2 \
+                        --l2_norm_regularization_weight=0.2 \
+                        --unique_role_regularization_weight=0.2 \
+                        --role_assigner_num_layers=2 \
+                        --use_one_hot_temperature \
+                        --softmax_roles \
+                        --train=False \
+                        --weight_file=/Users/sukritrao/Documents/NYU/Coursework/Summer2022/Research/role-analysis/rldn/output/role_learning5_model_simple_gru_hidden_100_dropout_0.1/model.tpr \
+
+
+Training ROLE model on seq2seq model (COGS)
+1. Generate vectors for ROLE training
+- cd COGS/scripts
+- edit the params in run_prepare_role_data.sh
+- bash run_prepare_role_data.sh ../exp_data ../src/OpenNMT-py
+
+2. Copy to RLDN dir
+cp COGS/role_data rldn/cogs_role_data rldn/data/
+
+3. Train ROLE Model
+- cd rldn
+- For training from scratch run
+    -  python3 decompose.py --data_prefix=cogs_data/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512_embd \
+                            --test_decoder=True \
+                            --cogs_decoder_rnn_type=GRU \
+                            --cogs_checkpoint=./data/cogs_data/1_layer_with_attn_new_vocab/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/cogs_ckpt_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512.pt \
+                            --cogs_train_data=./data/cogs_data/modified_train.txt \
+                            --cogs_test_data=./data/cogs_data/modified_test.txt \
+                            --cogs_src_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/1_example_src_dev_vocab.json \
+                            --cogs_tgt_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/1_example_tgt_dev_vocab.json \
+                            --num_roles=128 \
+                            --filler_dim=100 \
+                            --role_dim=128 \
+                            --hidden_size=512 \
+                            --decoder_embedding_size=512 \
+                            --patience=10 \
+                            --output_dir=cogs_role_learning/cogs_${SEED}_example_lstm_uni_no_att_1layers_no_if_hidden512 \
+                            --role_learning \
+                            --bidirectional \
+                            --one_hot_regularization_weight=0.02 \
+                            --l2_norm_regularization_weight=0.02 \
+                            --unique_role_regularization_weight=0.02 \
+                            --role_assigner_num_layers=2 \
+                            --softmax_roles \
+                            --use_one_hot_temperature \
+                            --train=False \
+                            --weight_file=./output/cogs_role_learning/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/model.tpr
+
+
+- For training from checkpoint run
+    -  python3 decompose.py --data_prefix=cogs_1_example_lstm_uni_no_att_1layers_no_if/cogs_1_example_lstm_uni_no_att_1layers_no_if_seed42_embd \
+                            --test_decoder=True \
+                            --cogs_checkpoint=./data/cogs_1_example_lstm_uni_no_att_1layers_no_if/saved_models/cogs_decoder_1_example_lstm_uni_no_att_1layers_no_if.pt \
+                            --cogs_train_data=./data/cogs_data/modified_train.txt \
+                            --cogs_test_data=./data/cogs_data/modified_test.txt \
+                            --cogs_src_vocab_path=./data/cogs_data/1_example_src_vocab.json \
+                            --cogs_tgt_vocab_path=./data/cogs_data/1_example_tgt_vocab.json \
+                            --num_roles=50 \
+                            --filler_dim=100 \
+                            --role_dim=50 \
+                            --hidden_size=512 \
+                            --decoder_embedding_size=512 \
+                            --patience=10 \
+                            --output_dir=cogs_role_learning/cogs_1_example_lstm_uni_no_att_1layers_no_if_hidden512 \
+                            --role_learning \
+                            --bidirectional \
+                            --one_hot_regularization_weight=0.02 \
+                            --l2_norm_regularization_weight=0.02 \
+                            --unique_role_regularization_weight=0.02 \
+                            --role_assigner_num_layers=2 \
+                            --softmax_roles \
+                            --use_one_hot_temperature \
+                            --weight_file=./output/cogs_role_learning/cogs_1_example_lstm_uni_no_att_1layers_no_if_hidden512/
+
+To skip training and run inference alone run
+- For training from checkpoint run
+    -  python3 decompose.py --data_prefix=cogs_1_example_lstm_uni_no_att_1layers_no_if/cogs_1_example_lstm_uni_no_att_1layers_no_if_seed42_embd \
+                            --test_decoder=True \
+                            --cogs_checkpoint=./data/cogs_1_example_lstm_uni_no_att_1layers_no_if/saved_models/cogs_decoder_1_example_lstm_uni_no_att_1layers_no_if.pt \
+                            --cogs_train_data=./data/cogs_data/modified_train.txt \
+                            --cogs_test_data=./data/cogs_data/modified_test.txt \
+                            --cogs_src_vocab_path=./data/cogs_data/1_example_src_vocab.json \
+                            --cogs_tgt_vocab_path=./data/cogs_data/1_example_tgt_vocab.json \
+                            --num_roles=50 \
+                            --filler_dim=100 \
+                            --role_dim=50 \
+                            --hidden_size=512 \
+                            --decoder_embedding_size=512 \
+                            --patience=10 \
+                            --output_dir=cogs_role_learning/cogs_1_example_lstm_uni_no_att_1layers_no_if_hidden512 \
+                            --role_learning \
+                            --bidirectional \
+                            --one_hot_regularization_weight=0.02 \
+                            --l2_norm_regularization_weight=0.02 \
+                            --unique_role_regularization_weight=0.02 \
+                            --role_assigner_num_layers=2 \
+                            --softmax_roles \
+                            --use_one_hot_temperature \
+                            --train=False \
+                            --weight_file=./output/cogs_role_learning/cogs_1_example_lstm_uni_no_att_1layers_no_if_hidden512/
+
+
+To compute swapping accuracy for discrete, switch role_learning off and provide a predefined_role_scheme
+python3 decompose.py --data_prefix=cogs_data/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512_embd \
+                     --test_decoder=True \
+                     --cogs_decoder_rnn_type=GRU \
+                     --cogs_checkpoint=./data/cogs_data/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/cogs_ckpt_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512.pt \
+                     --cogs_train_data=./data/cogs_data/modified_train.txt \
+                     --cogs_test_data=./data/cogs_data/modified_test.txt \
+                     --cogs_src_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/1_example_src_dev_vocab.json \
+                     --cogs_tgt_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/saved_models/1_example_tgt_dev_vocab.json \
+                     --cogs_use_attn \
+                     --num_roles=128 \
+                     --filler_dim=100 \
+                     --role_dim=128 \
+                     --hidden_size=512 \
+                     --decoder_embedding_size=512 \
+                     --patience=10 \
+                     --output_dir=cogs_role_learning/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_example_gru_uni_no_att_1layers_no_if_hidden512 \
+                     --bidirectional \
+                     --one_hot_regularization_weight=0.02 \
+                     --l2_norm_regularization_weight=0.02 \
+                     --unique_role_regularization_weight=0.02 \
+                     --role_assigner_num_layers=2 \
+                     --softmax_roles \
+                     --use_one_hot_temperature \
+                     --train=True \
+                     --role_dir=./output/cogs_role_learning/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/ \
+                     --role_prefix=cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512
+
+                     --weight_file=./output/cogs_role_learning/1_layer_with_attn_new_vocab/gru/cogs_seed_${SEED}_1_example_gru_uni_att_1layers_no_if_hidden512/model.tpr
+
+
+
+
+LSTM
+python3 decompose.py --data_prefix=cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512_embd \
+                     --test_decoder=True \
+                     --cogs_decoder_rnn_type=LSTM \
+                     --cogs_checkpoint=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/cogs_ckpt_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512.pt \
+                     --cogs_train_data=./data/cogs_data/modified_train.txt \
+                     --cogs_test_data=./data/cogs_data/modified_test.txt \
+                     --cogs_src_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/1_example_src_dev_vocab.json \
+                     --cogs_tgt_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/1_example_tgt_dev_vocab.json \
+                     --cogs_use_attn \
+                     --num_roles=128 \
+                     --filler_dim=100 \
+                     --role_dim=128 \
+                     --hidden_size=512 \
+                     --decoder_embedding_size=512 \
+                     --patience=10 \
+                     --output_dir=cogs_role_learning/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512_hidden \
+                     --bidirectional \
+                     --one_hot_regularization_weight=0.02 \
+                     --l2_norm_regularization_weight=0.02 \
+                     --unique_role_regularization_weight=0.02 \
+                     --role_assigner_num_layers=2 \
+                     --softmax_roles \
+                     --use_one_hot_temperature \
+                     --train=True \
+                     --role_learning
+
+                     --role_dir=./output/cogs_role_learning/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512_hidden \
+                     --role_prefix=cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512_hidden
+                     --weight_file=./output/cogs_role_learning/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/model.tpr
+
+
+
+TO RUN NOTEBOOK
+1. Create kernel
+$ mkdir -p ~/.local/share/jupyter/kernels
+$ cd ~/.local/share/jupyter/kernels
+$ cp -R /share/apps/mypy/src/kernel_template ./my_env
+$ cd ./my_env
+$ ls
+kernel.json  logo-32x32.png  logo-64x64.png  python
+
+
+2. Set conda env. Change last line in python file in current dir
+singularity exec $nv \
+  --overlay /path/to/overlay.ext3:ro \  # <- change
+  /scratch/work/public/singularity/OS.sif\ # <- change
+  /bin/bash -c "source /ext3/env.sh; $cmd $args"
+
+CMD
+singularity exec  --overlay /scratch/str8775/conda_env/compositional-generalisation_env1.ext3:ro /scratch/str8775/conda_env/cuda11.7.99-cudnn8.5-devel-ubuntu22.04.2.sif /bin/bash -c "source /ext3/env.sh; $cmd $args"
+
+
+- path to .ext3 file (overlay)
+/scratch/str8775/conda_env/compositional-generalisation_env1.ext3
+
+- path to .sif file
+/scratch/str8775/conda_env/cuda11.7.99-cudnn8.5-devel-ubuntu22.04.2.sif
+
+
+3. Change kernel.json from
+{
+ "argv": [
+  "PYTHON_LOCATION",
+  "-m",
+  "ipykernel_launcher",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "KERNEL_DISPLAY_NAME",
+ "language": "python"
+}
+
+to
+
+{
+ "argv": [
+  "/home/$user/.local/share/jupyter/kernels/my_env/python",
+  "-m",
+  "ipykernel_launcher",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "cogs",
+ "language": "python"
+}
+
+# Inference on gen set
+python3 decompose.py --data_prefix=cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512_embd \
+                     --test_decoder=True \
+                     --cogs_decoder_rnn_type=LSTM \
+                     --cogs_checkpoint=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/cogs_ckpt_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512.pt \
+                     --cogs_train_data=./data/cogs_data/modified_train.txt \
+                     --cogs_test_data=./data/cogs_data/modified_test.txt \
+                     --extra_test_set=.data_from_gen \
+                     --cogs_src_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/1_example_src_dev_vocab.json \
+                     --cogs_tgt_vocab_path=./data/cogs_data/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512/saved_models/1_example_tgt_dev_vocab.json \
+                     --cogs_use_attn \
+                     --num_roles=128 \
+                     --filler_dim=100 \
+                     --role_dim=128 \
+                     --hidden_size=512 \
+                     --decoder_embedding_size=512 \
+                     --patience=10 \
+                     --output_dir=cogs_role_learning/1_layer_with_attn_new_vocab_debugging/lstm/cogs_seed_${SEED}_1_example_lstm_uni_att_1layers_no_if_hidden512 \
+                     --bidirectional \
+                     --one_hot_regularization_weight=0.02 \
+                     --l2_norm_regularization_weight=0.02 \
+                     --unique_role_regularization_weight=0.02 \
+                     --role_assigner_num_layers=2 \
+                     --softmax_roles \
+                     --use_one_hot_temperature \
+                     --train=True \
+                     --role_learning
