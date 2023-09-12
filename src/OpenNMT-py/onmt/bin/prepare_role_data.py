@@ -27,6 +27,12 @@ from torch.cuda.amp import custom_fwd, custom_bwd
 import torch.nn as nn
 
 
+use_cuda = torch.cuda.is_available()
+if use_cuda:
+    device = torch.device('cuda')
+else:
+    device = torch.device('cpu')
+
 class EncoderRNN(nn.Module):
     # def __init__(self, input_size=745, hidden_size=512, mytype='LSTM', n_layers=1, dropout_p=0.1):
     def __init__(self, input_size=747, hidden_size=512, mytype='LSTM', n_layers=1, dropout_p=0.1):
@@ -308,7 +314,9 @@ def run_encoder(batch, model, test_encoder=None):
 
     if test_encoder:
         test_encoder_input = src.permute(1, 2, 0).squeeze(0)
+        test_encoder_input.to(device)
 
+        test_encoder.to(device)
         test_encoder.eval()
 
         test_encoder_outputs, test_encoder_hidden = \
@@ -519,7 +527,10 @@ def save_embd(src_shard, tgt_shard,
             print("*" * 50 + '\n')
 
         # fmt_embd = embd.cpu().detach().numpy().tolist()
-        fmt_embd = enc_states.detach().numpy().flatten().tolist()
+        if isinstance(enc_states, tuple):
+            fmt_embd = enc_states[0].cpu().detach().numpy().flatten().tolist()
+        else:
+            fmt_embd = enc_states.cpu().detach().numpy().flatten().tolist()
 
         fmt_embd = [str(x) for x in fmt_embd]
         fmt_embd = " ".join(fmt_embd)
