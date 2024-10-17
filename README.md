@@ -38,7 +38,7 @@ First, reformat the .tsv format dataset into format used by the OpenNMT preproce
 
 Second, run OpenNMT preprocess. output_path should be the same as the output of the previous step, and opennmt_path should point to the src/OpenNMT directory in this repo.
 
-    bash opennmt_preprocess.sh output_path opennmt_path
+    bash opennmt_preprocess.sh scripts/config/build_vocab_1_example.yml <opennmt_path>
 
 
 ### Training and inference
@@ -50,3 +50,12 @@ See scripts named `run_x.sh` under `scripts/`, where x is one of `transformer`, 
 Please refer to the individual script files for the hyperparameter settings for each model and random seed.
 
 After running the script, the predictions of the model for in-distribution dev/test sets and out-of-distribution generalization set will be saved under `$OPENNMT_PATH/pred/` as a .tsv file. It will be a tab-delimited file with 3 columns: source, target, model_prediction.
+
+
+### Exporting the Embeddings of COGS Encoder
+To export the embeddings of the seq2seq encoder to use as the target in the ROLE network, run 
+
+```bash
+bash run_prepare_role_data.sh <path to Open-NMT preprocessed data> <path to Open-NMT dir> <SEED>
+```
+
