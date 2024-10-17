@@ -1,0 +1,8 @@
+# Corpus opts:
+data:
+    train:
+        path_src: ../exp_data/latest/1_example/train_source.txt
+        path_tgt: ../exp_data/latest/1_example/train_target.txt
+    valid:
+        path_src: ../exp_data/latest/1_example/dev_source.txt
+        path_tgt: ../exp_data/latest/1_example/dev_target.txt
