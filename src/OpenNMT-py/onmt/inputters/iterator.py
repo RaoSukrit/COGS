@@ -1,4 +1,5 @@
 """Contains all methods relate to iteration."""
+
 import torchtext.data
 
 from onmt.utils.logging import logger
@@ -11,8 +12,10 @@ def batch_iter(data, batch_size, batch_size_fn=None, batch_size_multiple=1):
     This is an extended version of torchtext.data.batch.
     """
     if batch_size_fn is None:
+
         def batch_size_fn(new, count, sofar):
             return count
+
     minibatch, size_so_far = [], 0
     for ex in data:
         minibatch.append(ex)
@@ -22,8 +25,7 @@ def batch_iter(data, batch_size, batch_size_fn=None, batch_size_multiple=1):
             if size_so_far > batch_size:
                 overflowed += 1
             if batch_size_multiple > 1:
-                overflowed += (
-                    (len(minibatch) - overflowed) % batch_size_multiple)
+                overflowed += (len(minibatch) - overflowed) % batch_size_multiple
             if overflowed == 0:
                 yield minibatch
                 minibatch, size_so_far = [], 0
@@ -33,7 +35,7 @@ def batch_iter(data, batch_size, batch_size_fn=None, batch_size_multiple=1):
                         "The batch will be filled until we reach %d,"
                         "its size may exceed %d tokens"
                         % (batch_size_multiple, batch_size)
-                        )
+                    )
                 else:
                     yield minibatch[:-overflowed]
                     minibatch = minibatch[-overflowed:]
@@ -44,29 +46,41 @@ def batch_iter(data, batch_size, batch_size_fn=None, batch_size_multiple=1):
         yield minibatch
 
 
-def _pool(data, batch_size, batch_size_fn, batch_size_multiple,
-          sort_key, random_shuffler, pool_factor):
+def _pool(
+    data,
+    batch_size,
+    batch_size_fn,
+    batch_size_multiple,
+    sort_key,
+    random_shuffler,
+    pool_factor,
+):
     for p in torchtext.data.batch(
-            data, batch_size * pool_factor,
-            batch_size_fn=batch_size_fn):
-        p_batch = list(batch_iter(
-            sorted(p, key=sort_key),
-            batch_size,
-            batch_size_fn=batch_size_fn,
-            batch_size_multiple=batch_size_multiple))
+        data, batch_size * pool_factor, batch_size_fn=batch_size_fn
+    ):
+        p_batch = list(
+            batch_iter(
+                sorted(p, key=sort_key),
+                batch_size,
+                batch_size_fn=batch_size_fn,
+                batch_size_multiple=batch_size_multiple,
+            )
+        )
         for b in random_shuffler(p_batch):
             yield b
 
 
 class OrderedIterator(torchtext.data.Iterator):
 
-    def __init__(self,
-                 dataset,
-                 batch_size,
-                 pool_factor=1,
-                 batch_size_multiple=1,
-                 yield_raw_example=False,
-                 **kwargs):
+    def __init__(
+        self,
+        dataset,
+        batch_size,
+        pool_factor=1,
+        batch_size_multiple=1,
+        yield_raw_example=False,
+        **kwargs
+    ):
         super(OrderedIterator, self).__init__(dataset, batch_size, **kwargs)
         self.batch_size_multiple = batch_size_multiple
         self.yield_raw_example = yield_raw_example
@@ -77,10 +91,8 @@ class OrderedIterator(torchtext.data.Iterator):
         if self.train:
             if self.yield_raw_example:
                 self.batches = batch_iter(
-                    self.data(),
-                    1,
-                    batch_size_fn=None,
-                    batch_size_multiple=1)
+                    self.data(), 1, batch_size_fn=None, batch_size_multiple=1
+                )
             else:
                 self.batches = _pool(
                     self.data(),
@@ -89,14 +101,16 @@ class OrderedIterator(torchtext.data.Iterator):
                     self.batch_size_multiple,
                     self.sort_key,
                     self.random_shuffler,
-                    self.pool_factor)
+                    self.pool_factor,
+                )
         else:
             self.batches = []
             for b in batch_iter(
-                    self.data(),
-                    self.batch_size,
-                    batch_size_fn=self.batch_size_fn,
-                    batch_size_multiple=self.batch_size_multiple):
+                self.data(),
+                self.batch_size,
+                batch_size_fn=self.batch_size_fn,
+                batch_size_multiple=self.batch_size_multiple,
+            ):
                 self.batches.append(sorted(b, key=self.sort_key))
 
     def __iter__(self):
@@ -124,10 +138,7 @@ class OrderedIterator(torchtext.data.Iterator):
                 if self.yield_raw_example:
                     yield minibatch[0]
                 else:
-                    yield torchtext.data.Batch(
-                        minibatch,
-                        self.dataset,
-                        self.device)
+                    yield torchtext.data.Batch(minibatch, self.dataset, self.device)
             if not self.repeat:
                 return
 

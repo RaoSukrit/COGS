@@ -1,4 +1,5 @@
 """Image Encoder."""
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
@@ -16,25 +17,32 @@ class ImageEncoder(EncoderBase):
         dropout (float): dropout probablity.
     """
 
-    def __init__(self, num_layers, bidirectional, rnn_size, dropout,
-                 image_chanel_size=3):
+    def __init__(
+        self, num_layers, bidirectional, rnn_size, dropout, image_chanel_size=3
+    ):
         super(ImageEncoder, self).__init__()
         self.num_layers = num_layers
         self.num_directions = 2 if bidirectional else 1
         self.hidden_size = rnn_size
 
-        self.layer1 = nn.Conv2d(image_chanel_size, 64, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
-        self.layer2 = nn.Conv2d(64, 128, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
-        self.layer3 = nn.Conv2d(128, 256, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
-        self.layer4 = nn.Conv2d(256, 256, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
-        self.layer5 = nn.Conv2d(256, 512, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
-        self.layer6 = nn.Conv2d(512, 512, kernel_size=(3, 3),
-                                padding=(1, 1), stride=(1, 1))
+        self.layer1 = nn.Conv2d(
+            image_chanel_size, 64, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
+        self.layer2 = nn.Conv2d(
+            64, 128, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
+        self.layer3 = nn.Conv2d(
+            128, 256, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
+        self.layer4 = nn.Conv2d(
+            256, 256, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
+        self.layer5 = nn.Conv2d(
+            256, 512, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
+        self.layer6 = nn.Conv2d(
+            512, 512, kernel_size=(3, 3), padding=(1, 1), stride=(1, 1)
+        )
 
         self.batch_norm1 = nn.BatchNorm2d(256)
         self.batch_norm2 = nn.BatchNorm2d(512)
@@ -42,10 +50,13 @@ class ImageEncoder(EncoderBase):
 
         src_size = 512
         dropout = dropout[0] if type(dropout) is list else dropout
-        self.rnn = nn.LSTM(src_size, int(rnn_size / self.num_directions),
-                           num_layers=num_layers,
-                           dropout=dropout,
-                           bidirectional=bidirectional)
+        self.rnn = nn.LSTM(
+            src_size,
+            int(rnn_size / self.num_directions),
+            num_layers=num_layers,
+            dropout=dropout,
+            bidirectional=bidirectional,
+        )
         self.pos_lut = nn.Embedding(1000, src_size)
 
     @classmethod
@@ -63,7 +74,7 @@ class ImageEncoder(EncoderBase):
             opt.brnn,
             opt.enc_rnn_size,
             opt.dropout[0] if type(opt.dropout) is list else opt.dropout,
-            image_channel_size
+            image_channel_size,
         )
 
     def load_pretrained_vectors(self, opt):
@@ -114,13 +125,12 @@ class ImageEncoder(EncoderBase):
         # # (batch_size, 512, H, W)
         all_outputs = []
         for row in range(src.size(2)):
-            inp = src[:, :, row, :].transpose(0, 2) \
-                .transpose(1, 2)
-            row_vec = torch.Tensor(batch_size).type_as(inp.data) \
-                .long().fill_(row)
+            inp = src[:, :, row, :].transpose(0, 2).transpose(1, 2)
+            row_vec = torch.Tensor(batch_size).type_as(inp.data).long().fill_(row)
             pos_emb = self.pos_lut(row_vec)
             with_pos = torch.cat(
-                (pos_emb.view(1, pos_emb.size(0), pos_emb.size(1)), inp), 0)
+                (pos_emb.view(1, pos_emb.size(0), pos_emb.size(1)), inp), 0
+            )
             outputs, hidden_t = self.rnn(with_pos)
             all_outputs.append(outputs)
         out = torch.cat(all_outputs, 0)

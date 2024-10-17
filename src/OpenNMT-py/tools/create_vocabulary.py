@@ -37,9 +37,12 @@ def read_files_batch(file_list):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-file_type', default='text',
-                        choices=['text', 'field'], required=True,
-                        help="""Options for vocabulary creation.
+    parser.add_argument(
+        "-file_type",
+        default="text",
+        choices=["text", "field"],
+        required=True,
+        help="""Options for vocabulary creation.
                                The default is 'text' where the user passes
                                a corpus or a list of corpora files for which
                                they want to create a vocabulary from.
@@ -48,16 +51,21 @@ def main():
                                the preprocessing stage of an already
                                preprocessed corpus. The vocabulary file created
                                will just be the vocabulary inside the field
-                               corresponding to the argument 'side'.""")
+                               corresponding to the argument 'side'.""",
+    )
     parser.add_argument("-file", type=str, nargs="+", required=True)
     parser.add_argument("-out_file", type=str, required=True)
-    parser.add_argument("-side", choices=['src', 'tgt'], help="""Specifies
-                               'src' or 'tgt' side for 'field' file_type.""")
+    parser.add_argument(
+        "-side",
+        choices=["src", "tgt"],
+        help="""Specifies
+                               'src' or 'tgt' side for 'field' file_type.""",
+    )
 
     opt = parser.parse_args()
 
     vocabulary = {}
-    if opt.file_type == 'text':
+    if opt.file_type == "text":
         print("Reading input file...")
         for batch in read_files_batch(opt.file):
             for sentence in batch:
@@ -69,24 +77,29 @@ def main():
 
         print("Writing vocabulary file...")
         with open(opt.out_file, "w") as f:
-            for w, count in sorted(vocabulary.items(), key=lambda x: x[1],
-                                   reverse=True):
+            for w, count in sorted(
+                vocabulary.items(), key=lambda x: x[1], reverse=True
+            ):
                 f.write("{0}\n".format(w))
     else:
-        if opt.side not in ['src', 'tgt']:
-            raise ValueError("If using -file_type='field', specifies "
-                             "'src' or 'tgt' argument for -side.")
+        if opt.side not in ["src", "tgt"]:
+            raise ValueError(
+                "If using -file_type='field', specifies "
+                "'src' or 'tgt' argument for -side."
+            )
         import torch
+
         try:
             from onmt.inputters.inputter import _old_style_vocab
         except ImportError:
-            sys.path.insert(1, os.path.join(sys.path[0], '..'))
+            sys.path.insert(1, os.path.join(sys.path[0], ".."))
             from onmt.inputters.inputter import _old_style_vocab
 
         print("Reading input file...")
         if not len(opt.file) == 1:
-            raise ValueError("If using -file_type='field', only pass one "
-                             "argument for -file.")
+            raise ValueError(
+                "If using -file_type='field', only pass one " "argument for -file."
+            )
         vocabs = torch.load(opt.file[0])
         voc = dict(vocabs)[opt.side]
         if _old_style_vocab(voc):
@@ -100,7 +113,7 @@ def main():
         print("Writing vocabulary file...")
         with open(opt.out_file, "wb") as f:
             for w in word_list:
-                f.write(u"{0}\n".format(w).encode("utf-8"))
+                f.write("{0}\n".format(w).encode("utf-8"))
 
 
 if __name__ == "__main__":

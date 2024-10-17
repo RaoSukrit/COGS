@@ -15,36 +15,42 @@ class DataOptsCheckerMixin(object):
     def _validate_file(file_path, info):
         """Check `file_path` is valid or raise `IOError`."""
         if not os.path.isfile(file_path):
-            raise IOError(f"Please check path of your {info} file {file_path}\n{os.getcwd()}!")
+            raise IOError(
+                f"Please check path of your {info} file {file_path}\n{os.getcwd()}!"
+            )
 
     @classmethod
     def _validate_data(cls, opt):
         """Parse corpora specified in data field of YAML file."""
         import yaml
+
         default_transforms = opt.transforms
         if len(default_transforms) != 0:
             logger.info(f"Default transforms: {default_transforms}.")
 
         # corpora = yaml.safe_load(opt.data)
         # TODO: changed commented line above to code block below
-        with open(opt.data, 'r') as yml_file:
-            corpora = yaml.safe_load(yml_file)['data']
-
+        with open(opt.data, "r") as yml_file:
+            corpora = yaml.safe_load(yml_file)["data"]
 
         for cname, corpus in corpora.items():
             # Check Transforms
-            _transforms = corpus.get('transforms', None)
+            _transforms = corpus.get("transforms", None)
             if _transforms is None:
-                logger.info(f"Missing transforms field for {cname} data, "
-                            f"set to default: {default_transforms}.")
-                corpus['transforms'] = default_transforms
+                logger.info(
+                    f"Missing transforms field for {cname} data, "
+                    f"set to default: {default_transforms}."
+                )
+                corpus["transforms"] = default_transforms
             # Check path
-            path_src = corpus.get('path_src', None)
-            path_tgt = corpus.get('path_tgt', None)
+            path_src = corpus.get("path_src", None)
+            path_tgt = corpus.get("path_tgt", None)
             if path_src is None:
-                raise ValueError(f'Corpus {cname} src path is required.'
-                                 'tgt path is also required for non language'
-                                 ' modeling tasks.')
+                raise ValueError(
+                    f"Corpus {cname} src path is required."
+                    "tgt path is also required for non language"
+                    " modeling tasks."
+                )
             else:
                 opt.data_task = ModelTask.SEQ2SEQ
                 if path_tgt is None:
@@ -57,60 +63,69 @@ class DataOptsCheckerMixin(object):
                     corpus["path_tgt"] = path_src
                     corpora[cname] = corpus
                     path_tgt = path_src
-                cls._validate_file(path_src, info=f'{cname}/path_src')
-                cls._validate_file(path_tgt, info=f'{cname}/path_tgt')
-            path_align = corpus.get('path_align', None)
+                cls._validate_file(path_src, info=f"{cname}/path_src")
+                cls._validate_file(path_tgt, info=f"{cname}/path_tgt")
+            path_align = corpus.get("path_align", None)
             if path_align is None:
-                if hasattr(opt, 'lambda_align') and opt.lambda_align > 0.0:
-                    raise ValueError(f'Corpus {cname} alignment file path are '
-                                     'required when lambda_align > 0.0')
-                corpus['path_align'] = None
+                if hasattr(opt, "lambda_align") and opt.lambda_align > 0.0:
+                    raise ValueError(
+                        f"Corpus {cname} alignment file path are "
+                        "required when lambda_align > 0.0"
+                    )
+                corpus["path_align"] = None
             else:
-                cls._validate_file(path_align, info=f'{cname}/path_align')
+                cls._validate_file(path_align, info=f"{cname}/path_align")
             # Check prefix: will be used when use prefix transform
-            src_prefix = corpus.get('src_prefix', None)
-            tgt_prefix = corpus.get('tgt_prefix', None)
+            src_prefix = corpus.get("src_prefix", None)
+            tgt_prefix = corpus.get("tgt_prefix", None)
             if src_prefix is None or tgt_prefix is None:
-                if 'prefix' in corpus['transforms']:
-                    raise ValueError(f'Corpus {cname} prefix are required.')
+                if "prefix" in corpus["transforms"]:
+                    raise ValueError(f"Corpus {cname} prefix are required.")
             # Check weight
-            weight = corpus.get('weight', None)
+            weight = corpus.get("weight", None)
             if weight is None:
                 if cname != CorpusName.VALID:
-                    logger.warning(f"Corpus {cname}'s weight should be given."
-                                   " We default it to 1 for you.")
-                corpus['weight'] = 1
+                    logger.warning(
+                        f"Corpus {cname}'s weight should be given."
+                        " We default it to 1 for you."
+                    )
+                corpus["weight"] = 1
 
             # Check features
             src_feats = corpus.get("src_feats", None)
             if src_feats is not None:
                 for feature_name, feature_file in src_feats.items():
                     cls._validate_file(
-                        feature_file, info=f'{cname}/path_{feature_name}')
-                if 'inferfeats' not in corpus["transforms"]:
+                        feature_file, info=f"{cname}/path_{feature_name}"
+                    )
+                if "inferfeats" not in corpus["transforms"]:
                     raise ValueError(
                         "'inferfeats' transform is required "
-                        "when setting source features")
-                if 'filterfeats' not in corpus["transforms"]:
+                        "when setting source features"
+                    )
+                if "filterfeats" not in corpus["transforms"]:
                     raise ValueError(
                         "'filterfeats' transform is required "
-                        "when setting source features")
+                        "when setting source features"
+                    )
             else:
                 corpus["src_feats"] = None
 
         logger.info(f"Parsed {len(corpora)} corpora from -data.")
         # TODO: extra code block for debugging
         for cname, corpus in corpora.items():
-            path_src = corpus.get('path_src', None)
-            path_tgt = corpus.get('path_tgt', None)
+            path_src = corpus.get("path_src", None)
+            path_tgt = corpus.get("path_tgt", None)
 
-            with open(path_src, 'r') as fh:
+            with open(path_src, "r") as fh:
                 src_dataset = fh.readlines()
 
-            with open(path_tgt, 'r') as fh:
+            with open(path_tgt, "r") as fh:
                 tgt_dataset = fh.readlines()
 
-            logger.info(f"Corpus: {cname}\tsrc len: {len(src_dataset)}\ttgt len: {len(tgt_dataset)}")
+            logger.info(
+                f"Corpus: {cname}\tsrc len: {len(src_dataset)}\ttgt len: {len(tgt_dataset)}"
+            )
 
         opt.data = corpora
 
@@ -126,18 +141,19 @@ class DataOptsCheckerMixin(object):
         """Should only called after `_validate_data`."""
         all_transforms = set(opt.transforms)
         for cname, corpus in opt.data.items():
-            _transforms = set(corpus['transforms'])
+            _transforms = set(corpus["transforms"])
             if len(_transforms) != 0:
                 all_transforms.update(_transforms)
-        if hasattr(opt, 'lambda_align') and opt.lambda_align > 0.0:
-            if not all_transforms.isdisjoint(
-                    {'sentencepiece', 'bpe', 'onmt_tokenize'}):
-                raise ValueError('lambda_align is not compatible with'
-                                 ' on-the-fly tokenization.')
-            if not all_transforms.isdisjoint(
-                    {'tokendrop', 'prefix', 'bart'}):
-                raise ValueError('lambda_align is not compatible yet with'
-                                 ' potentiel token deletion/addition.')
+        if hasattr(opt, "lambda_align") and opt.lambda_align > 0.0:
+            if not all_transforms.isdisjoint({"sentencepiece", "bpe", "onmt_tokenize"}):
+                raise ValueError(
+                    "lambda_align is not compatible with" " on-the-fly tokenization."
+                )
+            if not all_transforms.isdisjoint({"tokendrop", "prefix", "bart"}):
+                raise ValueError(
+                    "lambda_align is not compatible yet with"
+                    " potentiel token deletion/addition."
+                )
         opt._all_transform = all_transforms
 
     @classmethod
@@ -150,42 +166,53 @@ class DataOptsCheckerMixin(object):
 
         for cname, corpus in opt.data.items():
             if cname != CorpusName.VALID and corpus["src_feats"] is not None:
-                assert opt.src_feats_vocab, \
-                    "-src_feats_vocab is required if using source features."
+                assert (
+                    opt.src_feats_vocab
+                ), "-src_feats_vocab is required if using source features."
                 if isinstance(opt.src_feats_vocab, str):
                     import yaml
+
                     opt.src_feats_vocab = yaml.safe_load(opt.src_feats_vocab)
 
                 for feature in corpus["src_feats"].keys():
-                    assert feature in opt.src_feats_vocab, \
-                        f"No vocab file set for feature {feature}"
+                    assert (
+                        feature in opt.src_feats_vocab
+                    ), f"No vocab file set for feature {feature}"
 
         if build_vocab_only:
             if not opt.share_vocab:
-                assert opt.tgt_vocab, \
-                    "-tgt_vocab is required if not -share_vocab."
+                assert opt.tgt_vocab, "-tgt_vocab is required if not -share_vocab."
             return
         # validation when train:
-        cls._validate_file(opt.src_vocab, info='src vocab')
+        cls._validate_file(opt.src_vocab, info="src vocab")
         if not opt.share_vocab:
-            cls._validate_file(opt.tgt_vocab, info='tgt vocab')
+            cls._validate_file(opt.tgt_vocab, info="tgt vocab")
 
         if opt.dump_fields or opt.dump_transforms:
-            assert opt.save_data, "-save_data should be set if set \
+            assert (
+                opt.save_data
+            ), "-save_data should be set if set \
                 -dump_fields or -dump_transforms."
         # Check embeddings stuff
         if opt.both_embeddings is not None:
-            assert (opt.src_embeddings is None
-                    and opt.tgt_embeddings is None), \
-                "You don't need -src_embeddings or -tgt_embeddings \
+            assert (
+                opt.src_embeddings is None and opt.tgt_embeddings is None
+            ), "You don't need -src_embeddings or -tgt_embeddings \
                 if -both_embeddings is set."
 
-        if any([opt.both_embeddings is not None,
+        if any(
+            [
+                opt.both_embeddings is not None,
                 opt.src_embeddings is not None,
-                opt.tgt_embeddings is not None]):
-            assert opt.embeddings_type is not None, \
-                "You need to specify an -embedding_type!"
-            assert opt.save_data, "-save_data should be set if use \
+                opt.tgt_embeddings is not None,
+            ]
+        ):
+            assert (
+                opt.embeddings_type is not None
+            ), "You need to specify an -embedding_type!"
+            assert (
+                opt.save_data
+            ), "-save_data should be set if use \
                 pretrained embeddings."
 
     @classmethod
@@ -207,7 +234,9 @@ class DataOptsCheckerMixin(object):
     def validate_prepare_opts(cls, opt, build_vocab_only=False):
         """Validate all options relate to prepare (data/transform/vocab)."""
         if opt.n_sample != 0:
-            assert opt.save_data, "-save_data should be set if \
+            assert (
+                opt.save_data
+            ), "-save_data should be set if \
                 want save samples."
         cls._validate_data(opt)
         cls._get_all_transform(opt)
@@ -223,14 +252,16 @@ class ArgumentParser(cfargparse.ArgumentParser, DataOptsCheckerMixin):
     """OpenNMT option parser powered with option check methods."""
 
     def __init__(
-            self,
-            config_file_parser_class=cfargparse.YAMLConfigFileParser,
-            formatter_class=cfargparse.ArgumentDefaultsHelpFormatter,
-            **kwargs):
+        self,
+        config_file_parser_class=cfargparse.YAMLConfigFileParser,
+        formatter_class=cfargparse.ArgumentDefaultsHelpFormatter,
+        **kwargs,
+    ):
         super(ArgumentParser, self).__init__(
             config_file_parser_class=config_file_parser_class,
             formatter_class=formatter_class,
-            **kwargs)
+            **kwargs,
+        )
 
     @classmethod
     def defaults(cls, *args):
@@ -248,9 +279,9 @@ class ArgumentParser(cfargparse.ArgumentParser, DataOptsCheckerMixin):
             model_opt.tgt_word_vec_size = model_opt.word_vec_size
 
         # Backward compatibility with "fix_word_vecs_*" opts
-        if hasattr(model_opt, 'fix_word_vecs_enc'):
+        if hasattr(model_opt, "fix_word_vecs_enc"):
             model_opt.freeze_word_vecs_enc = model_opt.fix_word_vecs_enc
-        if hasattr(model_opt, 'fix_word_vecs_dec'):
+        if hasattr(model_opt, "fix_word_vecs_dec"):
             model_opt.freeze_word_vecs_dec = model_opt.fix_word_vecs_dec
 
         if model_opt.layers > 0:
@@ -273,31 +304,36 @@ class ArgumentParser(cfargparse.ArgumentParser, DataOptsCheckerMixin):
 
     @classmethod
     def validate_model_opts(cls, model_opt):
-        assert model_opt.model_type in ["text"], \
+        assert model_opt.model_type in ["text"], (
             "Unsupported model type %s" % model_opt.model_type
+        )
 
         # encoder and decoder should be same sizes
         same_size = model_opt.enc_rnn_size == model_opt.dec_rnn_size
-        assert same_size, \
-            "The encoder and decoder rnns must be the same size for now"
+        assert same_size, "The encoder and decoder rnns must be the same size for now"
 
-        assert model_opt.rnn_type != "SRU" or model_opt.gpu_ranks, \
-            "Using SRU requires -gpu_ranks set."
+        assert (
+            model_opt.rnn_type != "SRU" or model_opt.gpu_ranks
+        ), "Using SRU requires -gpu_ranks set."
         if model_opt.share_embeddings:
             if model_opt.model_type != "text":
-                raise AssertionError(
-                    "--share_embeddings requires --model_type text.")
+                raise AssertionError("--share_embeddings requires --model_type text.")
         if model_opt.lambda_align > 0.0:
-            assert model_opt.decoder_type == 'transformer', \
-                "Only transformer is supported to joint learn alignment."
-            assert model_opt.alignment_layer < model_opt.dec_layers and \
-                model_opt.alignment_layer >= -model_opt.dec_layers, \
-                "N° alignment_layer should be smaller than number of layers."
-            logger.info("Joint learn alignment at layer [{}] "
-                        "with {} heads in full_context '{}'.".format(
-                            model_opt.alignment_layer,
-                            model_opt.alignment_heads,
-                            model_opt.full_context_alignment))
+            assert (
+                model_opt.decoder_type == "transformer"
+            ), "Only transformer is supported to joint learn alignment."
+            assert (
+                model_opt.alignment_layer < model_opt.dec_layers
+                and model_opt.alignment_layer >= -model_opt.dec_layers
+            ), "N° alignment_layer should be smaller than number of layers."
+            logger.info(
+                "Joint learn alignment at layer [{}] "
+                "with {} heads in full_context '{}'.".format(
+                    model_opt.alignment_layer,
+                    model_opt.alignment_heads,
+                    model_opt.full_context_alignment,
+                )
+            )
 
     @classmethod
     def ckpt_model_opts(cls, ckpt_opt):
@@ -311,40 +347,43 @@ class ArgumentParser(cfargparse.ArgumentParser, DataOptsCheckerMixin):
     @classmethod
     def validate_train_opts(cls, opt):
         if opt.epochs:
-            raise AssertionError(
-                  "-epochs is deprecated please use -train_steps.")
+            raise AssertionError("-epochs is deprecated please use -train_steps.")
         if opt.truncated_decoder > 0 and max(opt.accum_count) > 1:
             raise AssertionError("BPTT is not compatible with -accum > 1")
 
         if opt.gpuid:
-            raise AssertionError(
-                  "gpuid is deprecated see world_size and gpu_ranks")
+            raise AssertionError("gpuid is deprecated see world_size and gpu_ranks")
         if torch.cuda.is_available() and not opt.gpu_ranks:
             logger.warn("You have a CUDA device, should run with -gpu_ranks")
         if opt.world_size < len(opt.gpu_ranks):
             raise AssertionError(
-                  "parameter counts of -gpu_ranks must be less or equal "
-                  "than -world_size.")
-        if opt.world_size == len(opt.gpu_ranks) and \
-                min(opt.gpu_ranks) > 0:
+                "parameter counts of -gpu_ranks must be less or equal "
+                "than -world_size."
+            )
+        if opt.world_size == len(opt.gpu_ranks) and min(opt.gpu_ranks) > 0:
             raise AssertionError(
-                  "-gpu_ranks should have master(=0) rank "
-                  "unless -world_size is greater than len(gpu_ranks).")
+                "-gpu_ranks should have master(=0) rank "
+                "unless -world_size is greater than len(gpu_ranks)."
+            )
 
-        assert len(opt.dropout) == len(opt.dropout_steps), \
-            "Number of dropout values must match accum_steps values"
+        assert len(opt.dropout) == len(
+            opt.dropout_steps
+        ), "Number of dropout values must match accum_steps values"
 
-        assert len(opt.attention_dropout) == len(opt.dropout_steps), \
-            "Number of attention_dropout values must match accum_steps values"
+        assert len(opt.attention_dropout) == len(
+            opt.dropout_steps
+        ), "Number of attention_dropout values must match accum_steps values"
 
-        assert len(opt.accum_count) == len(opt.accum_steps), \
-            'Number of accum_count values must match number of accum_steps'
+        assert len(opt.accum_count) == len(
+            opt.accum_steps
+        ), "Number of accum_count values must match number of accum_steps"
 
         if opt.update_vocab:
-            assert opt.train_from, \
-                "-update_vocab needs -train_from option"
-            assert opt.reset_optim in ['states', 'all'], \
-                '-update_vocab needs -reset_optim "states" or "all"'
+            assert opt.train_from, "-update_vocab needs -train_from option"
+            assert opt.reset_optim in [
+                "states",
+                "all",
+            ], '-update_vocab needs -reset_optim "states" or "all"'
 
     @classmethod
     def validate_translate_opts(cls, opt):

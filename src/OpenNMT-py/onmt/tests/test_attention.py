@@ -1,6 +1,7 @@
 """
 Here come the tests for attention types and their compatibility
 """
+
 import unittest
 import torch
 from torch.autograd import Variable
@@ -22,14 +23,12 @@ class TestAttention(unittest.TestCase):
         batch_size = source_lengths.size(0)
         dim = 20
 
-        memory_bank = Variable(torch.randn(batch_size,
-                                           source_lengths.max(), dim))
+        memory_bank = Variable(torch.randn(batch_size, source_lengths.max(), dim))
         hidden = Variable(torch.randn(batch_size, dim))
 
         attn = onmt.modules.GlobalAttention(dim)
 
-        _, alignments = attn(hidden, memory_bank,
-                             memory_lengths=source_lengths)
+        _, alignments = attn(hidden, memory_bank, memory_lengths=source_lengths)
         # TODO: fix for pytorch 0.3
         # illegal_weights = alignments.masked_select(illegal_weights_mask)
 

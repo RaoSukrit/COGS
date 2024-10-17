@@ -1,4 +1,5 @@
 """Define a minimal encoder."""
+
 from onmt.encoders.encoder import EncoderBase
 from onmt.utils.misc import sequence_mask
 import torch
@@ -20,9 +21,7 @@ class MeanEncoder(EncoderBase):
     @classmethod
     def from_opt(cls, opt, embeddings):
         """Alternate constructor."""
-        return cls(
-            opt.enc_layers,
-            embeddings)
+        return cls(opt.enc_layers, embeddings)
 
     def forward(self, src, lengths=None):
         """See :func:`EncoderBase.forward()`"""

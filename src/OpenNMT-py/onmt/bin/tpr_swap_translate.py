@@ -13,7 +13,7 @@ def tpr_swap_translate(opt, out_file=None):
     logger = init_logger(opt.log_file)
     print(f"opt.src_feats={opt.src_feats}")
 
-    #translator, model = build_swap_translator(opt, report_score=True)
+    # translator, model = build_swap_translator(opt, report_score=True)
     src_shards = split_corpus(opt.src, opt.shard_size)
     tgt_shards = split_corpus(opt.tgt, opt.shard_size)
 
@@ -41,14 +41,14 @@ def tpr_swap_translate(opt, out_file=None):
             batch_size=opt.batch_size,
             batch_type=opt.batch_type,
             attn_debug=opt.attn_debug,
-            align_debug=opt.align_debug
-            )
+            align_debug=opt.align_debug,
+        )
 
     return
 
 
 def _get_parser():
-    parser = ArgumentParser(description='trp_swap_translate.py')
+    parser = ArgumentParser(description="trp_swap_translate.py")
 
     opts.config_opts(parser)
     opts.translate_opts(parser)

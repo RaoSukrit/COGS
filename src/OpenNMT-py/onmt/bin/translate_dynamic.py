@@ -23,9 +23,7 @@ def translate(opt):
     # Build transforms
     transforms_cls = get_transforms_cls(opt._all_transform)
     transforms = make_transforms(opt, transforms_cls, translator.fields)
-    data_transform = [
-        transforms[name] for name in opt.transforms if name in transforms
-    ]
+    data_transform = [transforms[name] for name in opt.transforms if name in transforms]
     transform = TransformPipe.build_from(data_transform)
 
     for i, (src_shard, tgt_shard, feats_shard) in enumerate(data_reader):
@@ -38,12 +36,12 @@ def translate(opt):
             batch_size=opt.batch_size,
             batch_type=opt.batch_type,
             attn_debug=opt.attn_debug,
-            align_debug=opt.align_debug
-            )
+            align_debug=opt.align_debug,
+        )
 
 
 def _get_parser():
-    parser = ArgumentParser(description='translate_dynamic.py')
+    parser = ArgumentParser(description="translate_dynamic.py")
 
     opts.config_opts(parser)
     opts.translate_opts(parser, dynamic=True)

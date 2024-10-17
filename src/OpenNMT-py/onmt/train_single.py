@@ -26,8 +26,9 @@ def _get_model_opts(opt, checkpoint=None):
         model_opt = ArgumentParser.ckpt_model_opts(checkpoint["opt"])
         ArgumentParser.update_model_opts(model_opt)
         ArgumentParser.validate_model_opts(model_opt)
-        if (opt.tensorboard_log_dir == model_opt.tensorboard_log_dir and
-                hasattr(model_opt, 'tensorboard_log_dir_dated')):
+        if opt.tensorboard_log_dir == model_opt.tensorboard_log_dir and hasattr(
+            model_opt, "tensorboard_log_dir_dated"
+        ):
             # ensure tensorboard output is written in the directory
             # of previous checkpoints
             opt.tensorboard_log_dir_dated = model_opt.tensorboard_log_dir_dated
@@ -43,21 +44,21 @@ def _get_model_opts(opt, checkpoint=None):
 
 def _build_valid_iter(opt, fields, transforms_cls):
     """Build iterator used for validation."""
-    valid_iter = build_dynamic_dataset_iter(
-        fields, transforms_cls, opt, is_train=False)
+    valid_iter = build_dynamic_dataset_iter(fields, transforms_cls, opt, is_train=False)
     return valid_iter
 
 
 def _build_train_iter(opt, fields, transforms_cls, stride=1, offset=0):
     """Build training iterator."""
     train_iter = build_dynamic_dataset_iter(
-        fields, transforms_cls, opt, is_train=True,
-        stride=stride, offset=offset)
+        fields, transforms_cls, opt, is_train=True, stride=stride, offset=offset
+    )
     return train_iter
 
 
-def main(opt, fields, transforms_cls, checkpoint, device_id,
-         batch_queue=None, semaphore=None):
+def main(
+    opt, fields, transforms_cls, checkpoint, device_id, batch_queue=None, semaphore=None
+):
     """Start training on `device_id`."""
     # NOTE: It's important that ``opt`` has been validated and updated
     # at this point.
@@ -77,14 +78,14 @@ def main(opt, fields, transforms_cls, checkpoint, device_id,
     model_saver = build_model_saver(model_opt, opt, model, fields, optim)
 
     trainer = build_trainer(
-        opt, device_id, model, fields, optim, model_saver=model_saver)
+        opt, device_id, model, fields, optim, model_saver=model_saver
+    )
 
     if batch_queue is None:
         _train_iter = _build_train_iter(opt, fields, transforms_cls)
         train_iter = IterOnDevice(_train_iter, device_id)
     else:
-        assert semaphore is not None, \
-            "Using batch_queue requires semaphore as well"
+        assert semaphore is not None, "Using batch_queue requires semaphore as well"
 
         def _train_iter():
             while True:
@@ -101,9 +102,9 @@ def main(opt, fields, transforms_cls, checkpoint, device_id,
         valid_iter = IterOnDevice(valid_iter, device_id)
 
     if len(opt.gpu_ranks):
-        logger.info('Starting training on GPU: %s' % opt.gpu_ranks)
+        logger.info("Starting training on GPU: %s" % opt.gpu_ranks)
     else:
-        logger.info('Starting training on CPU, could be very slow')
+        logger.info("Starting training on CPU, could be very slow")
     train_steps = opt.train_steps
     if opt.single_pass and train_steps > 0:
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
@@ -114,7 +115,8 @@ def main(opt, fields, transforms_cls, checkpoint, device_id,
         train_steps,
         save_checkpoint_steps=opt.save_checkpoint_steps,
         valid_iter=valid_iter,
-        valid_steps=opt.valid_steps)
+        valid_steps=opt.valid_steps,
+    )
 
     if trainer.report_manager.tensorboard_writer is not None:
         trainer.report_manager.tensorboard_writer.close()

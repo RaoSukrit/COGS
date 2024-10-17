@@ -7,8 +7,7 @@ from onmt.utils.logging import init_logger, logger
 from onmt.utils.parse import ArgumentParser
 from onmt.utils.loss import LMLossCompute
 from onmt.inputters import DynamicDataset, str2sortkey, OrderedIterator
-from onmt.inputters.text_dataset import InferenceDataIterator, \
-                                        InferenceDataReader
+from onmt.inputters.text_dataset import InferenceDataIterator, InferenceDataReader
 from onmt.transforms import make_transforms, get_transforms_cls, TransformPipe
 from onmt.model_builder import load_test_model
 
@@ -37,7 +36,7 @@ Corpus PPL is in the logger.info
 
 
 def _get_parser():
-    parser = ArgumentParser(description='LM_scoring.py')
+    parser = ArgumentParser(description="LM_scoring.py")
     opts.config_opts(parser)
     opts.translate_opts(parser, dynamic=True)
     return parser
@@ -61,16 +60,10 @@ def main():
     # Build transforms
     transforms_cls = get_transforms_cls(opt._all_transform)
     transforms = make_transforms(opt, transforms_cls, fields)
-    data_transform = [
-        transforms[name] for name in opt.transforms if name in transforms
-    ]
+    data_transform = [transforms[name] for name in opt.transforms if name in transforms]
     transform = TransformPipe.build_from(data_transform)
 
-    device = (
-        torch.device("cuda", opt.gpu)
-        if opt.gpu > -1
-        else torch.device("cpu")
-    )
+    device = torch.device("cuda", opt.gpu) if opt.gpu > -1 else torch.device("cpu")
     model.to(device)
     model.eval()
 
@@ -81,11 +74,14 @@ def main():
     padding_idx = tgt_field.vocab.stoi[tgt_field.pad_token]
     # Cannot use build_loss_compute() we need reduction 'none' in the criterion
     # to get the loss of each sentence instead of the loss of the full batch
-    criterion = torch.nn.NLLLoss(ignore_index=padding_idx, reduction='none')
+    criterion = torch.nn.NLLLoss(ignore_index=padding_idx, reduction="none")
     loss_gen = model.generator
-    valid_loss = LMLossCompute(criterion, loss_gen,
-                               lambda_coverage=model_opt.lambda_coverage,
-                               lambda_align=model_opt.lambda_align)
+    valid_loss = LMLossCompute(
+        criterion,
+        loss_gen,
+        lambda_coverage=model_opt.lambda_coverage,
+        lambda_align=model_opt.lambda_align,
+    )
     valid_loss.to(device)
 
     cumul_loss = 0.0
@@ -94,8 +90,9 @@ def main():
     with torch.no_grad():
         for i, (src_shard, tgt_shard, feats_shard) in enumerate(data_reader):
             logger.info("Translating shard %d." % i)
-            data_iter = InferenceDataIterator(src_shard, tgt_shard,
-                                              feats_shard, transform)
+            data_iter = InferenceDataIterator(
+                src_shard, tgt_shard, feats_shard, transform
+            )
             data = DynamicDataset(
                 fields,
                 data=data_iter,
@@ -115,15 +112,15 @@ def main():
             for i, batch in enumerate(data_iter2):
                 # reminder a batch includes .src .tgt .indices and it is sorted
                 batch_size = len(batch)
-                src, src_lengths = batch.src if isinstance(batch.src, tuple) \
-                    else (batch.src, None)
+                src, src_lengths = (
+                    batch.src if isinstance(batch.src, tuple) else (batch.src, None)
+                )
                 tgt = batch.tgt
-                outputs, attns = model(src, tgt, src_lengths,
-                                       with_align=False)
+                outputs, attns = model(src, tgt, src_lengths, with_align=False)
                 # Compute and retrieve the loss for EACH sentence
                 lossflat, _ = valid_loss(batch, outputs, attns)
                 loss = lossflat.view(-1, batch_size)
-                mask = (loss != 0)
+                mask = loss != 0
                 sent_loss = torch.sum(loss, dim=0) / mask.sum(dim=0)
                 sent_ppl = torch.exp(sent_loss)
                 cumul_loss += loss.sum().item()
@@ -133,11 +130,16 @@ def main():
                 sent_ppl_orig = sent_ppl.gather(0, batch.indices.argsort(0))
                 for j in range(batch_size):
                     srctxt = src_shard[i * opt.batch_size + j]
-                    out_file.write(srctxt.strip().decode("UTF-8") +
-                                   "\t" + str(sent_ppl_orig[j].item()) + "\n")
-        logger.info("Loss: %.2f Tokens: %d Corpus PPL: %.2f" %
-                    (cumul_loss, cumul_length,
-                     np.exp(cumul_loss / cumul_length)))
+                    out_file.write(
+                        srctxt.strip().decode("UTF-8")
+                        + "\t"
+                        + str(sent_ppl_orig[j].item())
+                        + "\n"
+                    )
+        logger.info(
+            "Loss: %.2f Tokens: %d Corpus PPL: %.2f"
+            % (cumul_loss, cumul_length, np.exp(cumul_loss / cumul_length))
+        )
         out_file.close()
 
 

@@ -78,8 +78,7 @@ class InferenceDataReader(object):
             features_shards = []
             features_names = []
             for feat_name, feat_path in self.src_feats.items():
-                features_shards.append(
-                    split_corpus(feat_path, self.shard_size))
+                features_shards.append(split_corpus(feat_path, self.shard_size))
                 features_names.append(feat_name)
 
         shard_pairs = zip(src_shards, tgt_shards, *features_shards)
@@ -103,35 +102,42 @@ class InferenceDataIterator(object):
         self.transform = transform
 
     def _tokenize(self, example):
-        example['src'] = example['src'].decode("utf-8").strip('\n').split()
-        example['tgt'] = example['tgt'].decode("utf-8").strip('\n').split() \
-            if example["tgt"] is not None else None
-        example['src_original'] = example['src']
-        example['tgt_original'] = example['tgt']
-        if 'src_feats' in example:
-            for k in example['src_feats'].keys():
-                example['src_feats'][k] = example['src_feats'][k] \
-                    .decode("utf-8").strip('\n').split() \
-                    if example['src_feats'][k] is not None else None
+        example["src"] = example["src"].decode("utf-8").strip("\n").split()
+        example["tgt"] = (
+            example["tgt"].decode("utf-8").strip("\n").split()
+            if example["tgt"] is not None
+            else None
+        )
+        example["src_original"] = example["src"]
+        example["tgt_original"] = example["tgt"]
+        if "src_feats" in example:
+            for k in example["src_feats"].keys():
+                example["src_feats"][k] = (
+                    example["src_feats"][k].decode("utf-8").strip("\n").split()
+                    if example["src_feats"][k] is not None
+                    else None
+                )
         return example
 
     def _transform(self, example, remove_tgt=False):
         maybe_example = self.transform.apply(
-                example, is_train=False, corpus_name="translate")
-        assert maybe_example is not None, \
-            "Transformation on example skipped the example. " \
+            example, is_train=False, corpus_name="translate"
+        )
+        assert maybe_example is not None, (
+            "Transformation on example skipped the example. "
             "Please check the transforms."
+        )
         return maybe_example
 
     def _process(self, example, remove_tgt=False):
-        example['src'] = {"src": ' '.join(example['src'])}
-        example['tgt'] = {"tgt": ' '.join(example['tgt'])}
+        example["src"] = {"src": " ".join(example["src"])}
+        example["tgt"] = {"tgt": " ".join(example["tgt"])}
 
         # Make features part of src as in TextMultiField
         # {'src': {'src': ..., 'feat1': ...., 'feat2': ....}}
-        if 'src_feats' in example:
-            for feat_name, feat_value in example['src_feats'].items():
-                example['src'][feat_name] = ' '.join(feat_value)
+        if "src_feats" in example:
+            for feat_name, feat_value in example["src_feats"].items():
+                example["src"][feat_name] = " ".join(feat_value)
             del example["src_feats"]
 
         # Cleanup
@@ -154,12 +160,10 @@ class InferenceDataIterator(object):
         else:
             features_values = [repeat(None)]
 
-        for i, (src, tgt, *src_feats) in enumerate(zip(
-                self.src, tgt, *features_values)):
-            ex = {
-                "src": src,
-                "tgt": tgt if tgt is not None else b""
-            }
+        for i, (src, tgt, *src_feats) in enumerate(
+            zip(self.src, tgt, *features_values)
+        ):
+            ex = {"src": src, "tgt": tgt if tgt is not None else b""}
             if src_feats[0] is not None:
                 src_feats_ = {}
                 for j, x in enumerate(src_feats):
@@ -181,8 +185,7 @@ def text_sort_key(ex):
 
 # Legacy function. Currently it only truncates input if truncate is set.
 # mix this with partial
-def _feature_tokenize(
-        string, layer=0, tok_delim=None, feat_delim=None, truncate=None):
+def _feature_tokenize(string, layer=0, tok_delim=None, feat_delim=None, truncate=None):
     """Split apart word features (like POS/NER tags) from the tokens.
 
     Args:
@@ -261,8 +264,10 @@ class TextMultiField(RawField):
             # lengths: batch_size
             base_data, lengths = base_data
 
-        feats = [ff.process(batch_by_feat[i], device=device)
-                 for i, (_, ff) in enumerate(self.fields[1:], 1)]
+        feats = [
+            ff.process(batch_by_feat[i], device=device)
+            for i, (_, ff) in enumerate(self.fields[1:], 1)
+        ]
         levels = [base_data] + feats
         # data: seq_len x batch_size x len(self.fields)
         data = torch.stack(levels, 2)
@@ -317,14 +322,15 @@ def text_fields(**kwargs):
 
     # Base field
     tokenize = partial(
-        _feature_tokenize,
-        layer=None,
-        truncate=truncate,
-        feat_delim=feat_delim)
+        _feature_tokenize, layer=None, truncate=truncate, feat_delim=feat_delim
+    )
     feat = Field(
-        init_token=bos, eos_token=eos,
-        pad_token=pad, tokenize=tokenize,
-        include_lengths=include_lengths)
+        init_token=bos,
+        eos_token=eos,
+        pad_token=pad,
+        tokenize=tokenize,
+        include_lengths=include_lengths,
+    )
     fields_.append((base_name, feat))
 
     # Feats fields
@@ -332,14 +338,15 @@ def text_fields(**kwargs):
         for feat_name in feats.keys():
             # Legacy function, it is not really necessary
             tokenize = partial(
-                _feature_tokenize,
-                layer=None,
-                truncate=truncate,
-                feat_delim=feat_delim)
+                _feature_tokenize, layer=None, truncate=truncate, feat_delim=feat_delim
+            )
             feat = Field(
-                init_token=bos, eos_token=eos,
-                pad_token=pad, tokenize=tokenize,
-                include_lengths=False)
+                init_token=bos,
+                eos_token=eos,
+                pad_token=pad,
+                tokenize=tokenize,
+                include_lengths=False,
+            )
             fields_.append((feat_name, feat))
 
     assert fields_[0][0] == base_name  # sanity check

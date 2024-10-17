@@ -25,7 +25,7 @@ def build_translator(opt, report_score=True, logger=None, out_file=None):
     if out_file is None:
         out_file = codecs.open(opt.output, "w+", "utf-8")
 
-    metrics_filepath = opt.output.rsplit('.', 1)[0]
+    metrics_filepath = opt.output.rsplit(".", 1)[0]
     metrics_filepath = f"{metrics_filepath}_metrics.txt"
 
     metrics_file = codecs.open(metrics_filepath, "w+", "utf-8")
@@ -161,7 +161,7 @@ class Inference(object):
         report_score=True,
         logger=None,
         seed=-1,
-        with_score=True
+        with_score=True,
     ):
         self.model = model
         self.fields = fields
@@ -176,9 +176,7 @@ class Inference(object):
         self._gpu = gpu
         self._use_cuda = gpu > -1
         self._dev = (
-            torch.device("cuda", self._gpu)
-            if self._use_cuda
-            else torch.device("cpu")
+            torch.device("cuda", self._gpu) if self._use_cuda else torch.device("cpu")
         )
 
         self.n_best = n_best
@@ -213,13 +211,8 @@ class Inference(object):
         self.copy_attn = copy_attn
 
         self.global_scorer = global_scorer
-        if (
-            self.global_scorer.has_cov_pen
-            and not self.model.decoder.attentional
-        ):
-            raise ValueError(
-                "Coverage penalty requires an attentional decoder."
-            )
+        if self.global_scorer.has_cov_pen and not self.model.decoder.attentional:
+            raise ValueError("Coverage penalty requires an attentional decoder.")
         self.out_file = out_file
         self.metrics_file = metrics_file
         self.report_align = report_align
@@ -312,7 +305,7 @@ class Inference(object):
             report_score=report_score,
             logger=logger,
             seed=opt.seed,
-            with_score=opt.with_score
+            with_score=opt.with_score,
         )
 
     def _log(self, msg):
@@ -355,7 +348,7 @@ class Inference(object):
         batch_type="sents",
         attn_debug=False,
         align_debug=False,
-        phrase_table=""
+        phrase_table="",
     ):
 
         if batch_size is None:
@@ -382,7 +375,8 @@ class Inference(object):
             align_debug=align_debug,
             phrase_table=phrase_table,
             dynamic=True,
-            transform=transform)
+            transform=transform,
+        )
 
     def translate(
         self,
@@ -419,16 +413,8 @@ class Inference(object):
         if self.tgt_prefix and tgt is None:
             raise ValueError("Prefix should be feed to tgt if -tgt_prefix.")
 
-        src_data = {
-            "reader": self.src_reader,
-            "data": src,
-            "features": src_feats
-        }
-        tgt_data = {
-            "reader": self.tgt_reader,
-            "data": tgt,
-            "features": {}
-        }
+        src_data = {"reader": self.src_reader, "data": src, "features": src_feats}
+        tgt_data = {"reader": self.tgt_reader, "data": tgt, "features": {}}
         _readers, _data = inputters.Dataset.config(
             [("src", src_data), ("tgt", tgt_data)]
         )
@@ -448,7 +434,8 @@ class Inference(object):
             batch_type=batch_type,
             attn_debug=attn_debug,
             align_debug=align_debug,
-            phrase_table=phrase_table)
+            phrase_table=phrase_table,
+        )
 
     def _translate(
         self,
@@ -460,7 +447,7 @@ class Inference(object):
         align_debug=False,
         phrase_table="",
         dynamic=False,
-        transform=None
+        transform=None,
     ):
 
         data_iter = inputters.OrderedIterator(
@@ -495,9 +482,7 @@ class Inference(object):
         start_time = time.time()
 
         for batch in data_iter:
-            batch_data = self.translate_batch(
-                batch, data.src_vocabs, attn_debug
-            )
+            batch_data = self.translate_batch(batch, data.src_vocabs, attn_debug)
             translations = xlation_builder.from_batch(batch_data)
 
             for trans in translations:
@@ -521,24 +506,19 @@ class Inference(object):
                         build_align_pharaoh(align)
                         for align in trans.word_aligns[: self.n_best]
                     ]
-                    n_best_preds_align = [
-                        " ".join(align) for align in align_pharaohs
-                    ]
+                    n_best_preds_align = [" ".join(align) for align in align_pharaohs]
                     n_best_preds = [
                         pred + DefaultTokens.ALIGNMENT_SEPARATOR + align
-                        for pred, align in zip(
-                            n_best_preds, n_best_preds_align
-                        )
+                        for pred, align in zip(n_best_preds, n_best_preds_align)
                     ]
 
                 if dynamic:
-                    n_best_preds = [transform.apply_reverse(x)
-                                    for x in n_best_preds]
+                    n_best_preds = [transform.apply_reverse(x) for x in n_best_preds]
                 all_predictions += [n_best_preds]
 
                 out_all = [
-                    pred + "\t" + str(score) for (pred, score) in
-                    zip(n_best_preds, n_best_scores)
+                    pred + "\t" + str(score)
+                    for (pred, score) in zip(n_best_preds, n_best_scores)
                 ]
 
                 if self.with_score:
@@ -588,18 +568,16 @@ class Inference(object):
         end_time = time.time()
 
         if self.report_score:
-            msg = self._report_score(
-                "PRED", pred_score_total, len(all_scores)
-            )
+            msg = self._report_score("PRED", pred_score_total, len(all_scores))
             self._log(msg)
             if tgt is not None:
-                msg = self._report_score(
-                    "GOLD", gold_score_total, len(all_scores)
-                )
+                msg = self._report_score("GOLD", gold_score_total, len(all_scores))
                 self._log(msg)
 
                 # EDIT Added accuracy metric
-                msg = 'PRED ACC : {} ({}/{})'.format(pred_acc_total/pred_sents_total, pred_acc_total, pred_sents_total)
+                msg = "PRED ACC : {} ({}/{})".format(
+                    pred_acc_total / pred_sents_total, pred_acc_total, pred_sents_total
+                )
                 self.logger.info(msg)
 
                 self.metrics_file.write(f"{msg}\n")
@@ -612,9 +590,7 @@ class Inference(object):
                 "Average translation time (ms): %.1f"
                 % (total_time / len(all_predictions) * 1000)
             )
-            self._log(
-                "Tokens per second: %.1f" % (pred_words_total / total_time)
-            )
+            self._log("Tokens per second: %.1f" % (pred_words_total / total_time))
 
         if self.dump_beam:
             import json
@@ -640,17 +616,13 @@ class Inference(object):
             batched_nbest_predict (torch.LongTensor): `(batch, n_best, tgt_l)`
         """
         dtype, device = predictions[0][0].dtype, predictions[0][0].device
-        flatten_tgt = [
-            best.tolist() for bests in predictions for best in bests
-        ]
+        flatten_tgt = [best.tolist() for bests in predictions for best in bests]
         paded_tgt = torch.tensor(
             list(zip_longest(*flatten_tgt, fillvalue=pad)),
             dtype=dtype,
             device=device,
         ).T
-        bos_tensor = torch.full(
-            [paded_tgt.size(0), 1], bos, dtype=dtype, device=device
-        )
+        bos_tensor = torch.full([paded_tgt.size(0), 1], bos, dtype=dtype, device=device)
         full_tgt = torch.cat((bos_tensor, paded_tgt), dim=-1)
         batched_nbest_predict = full_tgt.view(
             len(predictions), -1, full_tgt.size(-1)
@@ -674,7 +646,7 @@ class Inference(object):
                 score,
                 name,
                 ppl,
-                nb_sentences
+                nb_sentences,
             )
         return msg
 
@@ -743,9 +715,7 @@ class Inference(object):
         """Translate a batch of sentences."""
         raise NotImplementedError
 
-    def _score_target(
-        self, batch, memory_bank, src_lengths, src_vocabs, src_map
-    ):
+    def _score_target(self, batch, memory_bank, src_lengths, src_vocabs, src_map):
         raise NotImplementedError
 
     def report_results(
@@ -888,9 +858,7 @@ class Translator(Inference):
             batch.src if isinstance(batch.src, tuple) else (batch.src, None)
         )
 
-        enc_states, memory_bank, src_lengths = self.model.encoder(
-            src, src_lengths
-        )
+        enc_states, memory_bank, src_lengths = self.model.encoder(src, src_lengths)
         if src_lengths is None:
             assert not isinstance(
                 memory_bank, tuple
@@ -903,9 +871,7 @@ class Translator(Inference):
             )
         return src, enc_states, memory_bank, src_lengths
 
-    def _translate_batch_with_strategy(
-        self, batch, src_vocabs, decode_strategy
-    ):
+    def _translate_batch_with_strategy(self, batch, src_vocabs, decode_strategy):
         """Translate a batch of sentences step by step using cache.
 
         Args:
@@ -1005,9 +971,7 @@ class Translator(Inference):
             decode_strategy,
         )
 
-    def _score_target(
-        self, batch, memory_bank, src_lengths, src_vocabs, src_map
-    ):
+    def _score_target(self, batch, memory_bank, src_lengths, src_vocabs, src_map):
         tgt = batch.tgt
         tgt_in = tgt[:-1]
 
@@ -1056,11 +1020,13 @@ class GeneratorLM(Inference):
         phrase_table="",
     ):
         if batch_size != 1:
-            warning_msg = ("GeneratorLM does not support batch_size != 1"
-                           " nicely. You can remove this limitation here."
-                           " With batch_size > 1 the end of each input is"
-                           " repeated until the input is finished. Then"
-                           " generation will start.")
+            warning_msg = (
+                "GeneratorLM does not support batch_size != 1"
+                " nicely. You can remove this limitation here."
+                " With batch_size > 1 the end of each input is"
+                " repeated until the input is finished. Then"
+                " generation will start."
+            )
             if self.logger:
                 self.logger.info(warning_msg)
             else:
@@ -1141,9 +1107,7 @@ class GeneratorLM(Inference):
             log_probs = log_probs[-1]
         return log_probs
 
-    def _translate_batch_with_strategy(
-        self, batch, src_vocabs, decode_strategy
-    ):
+    def _translate_batch_with_strategy(self, batch, src_vocabs, decode_strategy):
         """Translate a batch of sentences step by step using cache.
 
         Args:
@@ -1199,9 +1163,7 @@ class GeneratorLM(Inference):
         # (4) Begin decoding step by step:
         for step in range(decode_strategy.max_length):
             decoder_input = (
-                src
-                if step == 0
-                else decode_strategy.current_predictions.view(1, -1, 1)
+                src if step == 0 else decode_strategy.current_predictions.view(1, -1, 1)
             )
 
             log_probs, attn = self._decode_and_generate(
@@ -1217,7 +1179,8 @@ class GeneratorLM(Inference):
 
             if step == 0:
                 log_probs = self.tile_to_beam_size_after_initial_step(
-                    fn_map_state, log_probs)
+                    fn_map_state, log_probs
+                )
 
             decode_strategy.advance(log_probs, attn)
             any_finished = decode_strategy.is_finished.any()
@@ -1252,9 +1215,7 @@ class GeneratorLM(Inference):
             decode_strategy,
         )
 
-    def _score_target(
-        self, batch, memory_bank, src_lengths, src_vocabs, src_map
-    ):
+    def _score_target(self, batch, memory_bank, src_lengths, src_vocabs, src_map):
         tgt = batch.tgt
         src, src_lengths = (
             batch.src if isinstance(batch.src, tuple) else (batch.src, None)

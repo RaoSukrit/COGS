@@ -5,8 +5,9 @@ from onmt.utils.misc import aeq
 from onmt.utils.loss import CommonLossCompute
 
 
-def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs=None,
-                         batch_dim=1, batch_offset=None):
+def collapse_copy_scores(
+    scores, batch, tgt_vocab, src_vocabs=None, batch_dim=1, batch_offset=None
+):
     """
     Given scores from an expanded dictionary
     corresponeding to a batch, sums together copies,
@@ -116,7 +117,7 @@ class CopyGenerator(nn.Module):
 
         # Original probabilities.
         logits = self.linear(hidden)
-        logits[:, self.pad_idx] = -float('inf')
+        logits[:, self.pad_idx] = -float("inf")
         prob = torch.softmax(logits, 1)
 
         # Probability of copying p(z=1) batch.
@@ -125,8 +126,7 @@ class CopyGenerator(nn.Module):
         out_prob = torch.mul(prob, 1 - p_copy)
         mul_attn = torch.mul(attn, p_copy)
         copy_prob = torch.bmm(
-            mul_attn.view(-1, batch, slen).transpose(0, 1),
-            src_map.transpose(0, 1)
+            mul_attn.view(-1, batch, slen).transpose(0, 1), src_map.transpose(0, 1)
         ).transpose(0, 1)
         copy_prob = copy_prob.contiguous().view(-1, cvocab)
         return torch.cat([out_prob, copy_prob], 1)
@@ -134,8 +134,10 @@ class CopyGenerator(nn.Module):
 
 class CopyGeneratorLoss(nn.Module):
     """Copy generator criterion."""
-    def __init__(self, vocab_size, force_copy, unk_index=0,
-                 ignore_index=-100, eps=1e-20):
+
+    def __init__(
+        self, vocab_size, force_copy, unk_index=0, ignore_index=-100, eps=1e-20
+    ):
         super(CopyGeneratorLoss, self).__init__()
         self.force_copy = force_copy
         self.eps = eps
@@ -167,9 +169,7 @@ class CopyGeneratorLoss(nn.Module):
         if not self.force_copy:
             non_copy = non_copy | (target != self.unk_index)
 
-        probs = torch.where(
-            non_copy, copy_tok_probs + vocab_probs, copy_tok_probs
-        )
+        probs = torch.where(non_copy, copy_tok_probs + vocab_probs, copy_tok_probs)
 
         loss = -probs.log()  # just NLLLoss; can the module be incorporated?
         # Drop padding.
@@ -179,16 +179,28 @@ class CopyGeneratorLoss(nn.Module):
 
 class CommonCopyGeneratorLossCompute(CommonLossCompute):
     """Common Copy Generator Loss Computation."""
-    def __init__(self, criterion, generator, tgt_vocab, normalize_by_length,
-                 lambda_coverage=0.0, tgt_shift_index=1):
+
+    def __init__(
+        self,
+        criterion,
+        generator,
+        tgt_vocab,
+        normalize_by_length,
+        lambda_coverage=0.0,
+        tgt_shift_index=1,
+    ):
         super(CommonCopyGeneratorLossCompute, self).__init__(
-            criterion, generator, lambda_coverage=lambda_coverage,
-            tgt_shift_index=tgt_shift_index)
+            criterion,
+            generator,
+            lambda_coverage=lambda_coverage,
+            tgt_shift_index=tgt_shift_index,
+        )
         self.tgt_vocab = tgt_vocab
         self.normalize_by_length = normalize_by_length
 
-    def _compute_loss(self, batch, output, target, copy_attn, align,
-                      std_attn=None, coverage_attn=None):
+    def _compute_loss(
+        self, batch, output, target, copy_attn, align, std_attn=None, coverage_attn=None
+    ):
         """Compute the loss.
 
         The args must match :func:`self._make_shard_state()`.
@@ -208,15 +220,17 @@ class CommonCopyGeneratorLossCompute(CommonLossCompute):
         loss = self.criterion(scores, align, target)
 
         if self.lambda_coverage != 0.0:
-            coverage_loss = self._compute_coverage_loss(std_attn,
-                                                        coverage_attn)
+            coverage_loss = self._compute_coverage_loss(std_attn, coverage_attn)
             loss += coverage_loss
 
         # this block does not depend on the loss value computed above
         # and is used only for stats
         scores_data = collapse_copy_scores(
             self._unbottle(scores.clone(), batch.batch_size),
-            batch, self.tgt_vocab, None)
+            batch,
+            self.tgt_vocab,
+            None,
+        )
         scores_data = self._bottle(scores_data)
 
         # this block does not depend on the loss value computed above
@@ -248,36 +262,48 @@ class CommonCopyGeneratorLossCompute(CommonLossCompute):
 
     def _make_shard_state(self, batch, output, range_, attns):
         """See base class for args description."""
-        shard_state = super(CommonCopyGeneratorLossCompute,
-                            self)._make_shard_state(batch, output,
-                                                    range_, attns)
+        shard_state = super(CommonCopyGeneratorLossCompute, self)._make_shard_state(
+            batch, output, range_, attns
+        )
 
         start_range = range_[0] + self.tgt_shift_index
         end_range = range_[1]
-        shard_state.update({
-            "copy_attn": attns.get("copy"),
-            "align": batch.alignment[start_range: end_range]
-        })
+        shard_state.update(
+            {
+                "copy_attn": attns.get("copy"),
+                "align": batch.alignment[start_range:end_range],
+            }
+        )
         return shard_state
 
 
 class CopyGeneratorLossCompute(CommonCopyGeneratorLossCompute):
     """Copy Generator Loss Computation."""
-    def __init__(self, criterion, generator, tgt_vocab, normalize_by_length,
-                 lambda_coverage=0.0):
-        super(CopyGeneratorLossCompute, self).__init__(criterion, generator,
-                                                       tgt_vocab,
-                                                       normalize_by_length,
-                                                       lambda_coverage=0.0,
-                                                       tgt_shift_index=1)
+
+    def __init__(
+        self, criterion, generator, tgt_vocab, normalize_by_length, lambda_coverage=0.0
+    ):
+        super(CopyGeneratorLossCompute, self).__init__(
+            criterion,
+            generator,
+            tgt_vocab,
+            normalize_by_length,
+            lambda_coverage=0.0,
+            tgt_shift_index=1,
+        )
 
 
 class CopyGeneratorLMLossCompute(CommonCopyGeneratorLossCompute):
     """Copy Generator LM Loss Computation."""
-    def __init__(self, criterion, generator, tgt_vocab, normalize_by_length,
-                 lambda_coverage=0.0):
-        super(CopyGeneratorLMLossCompute, self).__init__(criterion, generator,
-                                                         tgt_vocab,
-                                                         normalize_by_length,
-                                                         lambda_coverage=0.0,
-                                                         tgt_shift_index=0)
+
+    def __init__(
+        self, criterion, generator, tgt_vocab, normalize_by_length, lambda_coverage=0.0
+    ):
+        super(CopyGeneratorLMLossCompute, self).__init__(
+            criterion,
+            generator,
+            tgt_vocab,
+            normalize_by_length,
+            lambda_coverage=0.0,
+            tgt_shift_index=0,
+        )

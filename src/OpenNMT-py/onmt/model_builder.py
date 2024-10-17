@@ -2,6 +2,7 @@
 This file is for models creation, which consults options
 and creates each encoder and decoder accordingly.
 """
+
 import re
 import torch
 import torch.nn as nn
@@ -35,8 +36,9 @@ def build_embeddings(opt, text_field, for_encoder=True):
     num_embs = [len(f.vocab) for _, f in text_field]
     num_word_embeddings, num_feat_embeddings = num_embs[0], num_embs[1:]
 
-    freeze_word_vecs = opt.freeze_word_vecs_enc if for_encoder \
-        else opt.freeze_word_vecs_dec
+    freeze_word_vecs = (
+        opt.freeze_word_vecs_enc if for_encoder else opt.freeze_word_vecs_dec
+    )
 
     emb = Embeddings(
         word_vec_size=emb_dim,
@@ -50,7 +52,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
         word_vocab_size=num_word_embeddings,
         feat_vocab_sizes=num_feat_embeddings,
         sparse=opt.optim == "sparseadam",
-        freeze_word_vecs=freeze_word_vecs
+        freeze_word_vecs=freeze_word_vecs,
     )
     return emb
 
@@ -79,33 +81,31 @@ def build_decoder(opt, embeddings):
         opt: the option in current environment.
         embeddings (Embeddings): vocab embeddings for this decoder.
     """
-    dec_type = "ifrnn" if opt.decoder_type == "rnn" and opt.input_feed \
-               else opt.decoder_type
+    dec_type = (
+        "ifrnn" if opt.decoder_type == "rnn" and opt.input_feed else opt.decoder_type
+    )
     return str2dec[dec_type].from_opt(opt, embeddings)
 
 
 def load_test_model(opt, model_path=None):
     if model_path is None:
         model_path = opt.models[0]
-    checkpoint = torch.load(model_path,
-                            map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
 
-    model_opt = ArgumentParser.ckpt_model_opts(checkpoint['opt'])
+    model_opt = ArgumentParser.ckpt_model_opts(checkpoint["opt"])
     ArgumentParser.update_model_opts(model_opt)
     ArgumentParser.validate_model_opts(model_opt)
-    fields = checkpoint['vocab']
+    fields = checkpoint["vocab"]
 
     # Avoid functionality on inference
     model_opt.update_vocab = False
 
-    model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint,
-                             opt.gpu)
+    model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint, opt.gpu)
     if opt.fp32:
         model.float()
     elif opt.int8:
         if opt.gpu >= 0:
-            raise ValueError(
-                "Dynamic 8-bit quantization is not supported on GPU")
+            raise ValueError("Dynamic 8-bit quantization is not supported on GPU")
         torch.quantization.quantize_dynamic(model, inplace=True)
     model.eval()
     model.generator.eval()
@@ -190,16 +190,16 @@ def use_embeddings_from_checkpoint(fields, model, generator, checkpoint):
             for i, tok in enumerate(field.vocab.itos):
                 if tok in checkpoint_field.vocab.stoi:
                     old_i = checkpoint_field.vocab.stoi[tok]
-                    model.state_dict()[emb_name][i] = checkpoint["model"][
-                        emb_name
-                    ][old_i]
+                    model.state_dict()[emb_name][i] = checkpoint["model"][emb_name][
+                        old_i
+                    ]
                     if field_name == "tgt":
-                        generator.state_dict()["0.weight"][i] = checkpoint[
-                            "generator"
-                        ]["0.weight"][old_i]
-                        generator.state_dict()["0.bias"][i] = checkpoint[
-                            "generator"
-                        ]["0.bias"][old_i]
+                        generator.state_dict()["0.weight"][i] = checkpoint["generator"][
+                            "0.weight"
+                        ][old_i]
+                        generator.state_dict()["0.bias"][i] = checkpoint["generator"][
+                            "0.bias"
+                        ][old_i]
                 else:
                     # Just for debugging purposes
                     new_tokens.append(tok)
@@ -250,10 +250,9 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         else:
             gen_func = nn.LogSoftmax(dim=-1)
         generator = nn.Sequential(
-            nn.Linear(model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
+            nn.Linear(model_opt.dec_rnn_size, len(fields["tgt"].base_field.vocab)),
             Cast(torch.float32),
-            gen_func
+            gen_func,
         )
         if model_opt.share_decoder_embeddings:
             generator[0].weight = model.decoder.embeddings.word_lut.weight
@@ -282,32 +281,30 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
         if hasattr(model, "encoder") and hasattr(model.encoder, "embeddings"):
             model.encoder.embeddings.load_pretrained_vectors(
-                model_opt.pre_word_vecs_enc)
-        if hasattr(model.decoder, 'embeddings'):
+                model_opt.pre_word_vecs_enc
+            )
+        if hasattr(model.decoder, "embeddings"):
             model.decoder.embeddings.load_pretrained_vectors(
-                model_opt.pre_word_vecs_dec)
+                model_opt.pre_word_vecs_dec
+            )
 
     if checkpoint is not None:
         # This preserves backward-compat for models using customed layernorm
         def fix_key(s):
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.b_2',
-                       r'\1.layer_norm\2.bias', s)
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.a_2',
-                       r'\1.layer_norm\2.weight', s)
+            s = re.sub(r"(.*)\.layer_norm((_\d+)?)\.b_2", r"\1.layer_norm\2.bias", s)
+            s = re.sub(r"(.*)\.layer_norm((_\d+)?)\.a_2", r"\1.layer_norm\2.weight", s)
             return s
 
-        checkpoint['model'] = {fix_key(k): v
-                               for k, v in checkpoint['model'].items()}
+        checkpoint["model"] = {fix_key(k): v for k, v in checkpoint["model"].items()}
         # end of patch for backward compatibility
 
         if model_opt.update_vocab:
             # Update model embeddings with those from the checkpoint
             # after initialization
-            use_embeddings_from_checkpoint(fields, model, generator,
-                                           checkpoint)
+            use_embeddings_from_checkpoint(fields, model, generator, checkpoint)
 
-        model.load_state_dict(checkpoint['model'], strict=False)
-        generator.load_state_dict(checkpoint['generator'], strict=False)
+        model.load_state_dict(checkpoint["model"], strict=False)
+        generator.load_state_dict(checkpoint["generator"], strict=False)
 
     model.generator = generator
 
@@ -320,7 +317,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         model.decoder.embeddings.requires_grad_()
 
     model.to(device)
-    if model_opt.model_dtype == 'fp16' and model_opt.optim == 'fusedadam':
+    if model_opt.model_dtype == "fp16" and model_opt.optim == "fusedadam":
         model.half()
     return model
 
@@ -329,65 +326,73 @@ def load_tpr_test_model(opt, tpr_model_path=None, nmt_model_path=None):
     if tpr_model_path is None:
         tpr_model_path = opt.tpr_ckpt
 
-    tpr_checkpoint = torch.load(tpr_model_path,
-                                map_location=lambda storage, loc: storage)
-
+    tpr_checkpoint = torch.load(
+        tpr_model_path, map_location=lambda storage, loc: storage
+    )
 
     if nmt_model_path is None:
         nmt_model_path = opt.nmt_model[0]
 
-    nmt_model_ckpt = torch.load(nmt_model_path,
-                            map_location=lambda storage, loc: storage)
+    nmt_model_ckpt = torch.load(
+        nmt_model_path, map_location=lambda storage, loc: storage
+    )
 
-
-    nmt_model_opt = ArgumentParser.ckpt_model_opts(nmt_model_ckpt['opt'])
+    nmt_model_opt = ArgumentParser.ckpt_model_opts(nmt_model_ckpt["opt"])
     ArgumentParser.update_model_opts(nmt_model_opt)
     ArgumentParser.validate_model_opts(nmt_model_opt)
-    fields = nmt_model_ckpt['vocab']
+    fields = nmt_model_ckpt["vocab"]
 
-    print('fields', fields, fields['src'], fields['src'].fields, type(fields['src']))
-    print('fieldls indices', fields['indices'].__dict__)
+    print("fields", fields, fields["src"], fields["src"].fields, type(fields["src"]))
+    print("fieldls indices", fields["indices"].__dict__)
 
     import pickle
-    vocab = {'src': fields['src'].fields[0][-1], 'tgt': fields['tgt'].fields[0][-1], 'indices': fields['indices']}
-    print('\nvocab_src', vocab['src'].__dict__, type(vocab['src']))
 
-    #torch.save(vocab['src'], 'src_vocab.pt')
-    #torch.save(vocab['tgt'], 'tgt_vocab.pt')
-    #torch.save(vocab, 'vocab.pt')
+    vocab = {
+        "src": fields["src"].fields[0][-1],
+        "tgt": fields["tgt"].fields[0][-1],
+        "indices": fields["indices"],
+    }
+    print("\nvocab_src", vocab["src"].__dict__, type(vocab["src"]))
 
-    #print('\nvocab pickle', vocab)
+    # torch.save(vocab['src'], 'src_vocab.pt')
+    # torch.save(vocab['tgt'], 'tgt_vocab.pt')
+    # torch.save(vocab, 'vocab.pt')
+
+    # print('\nvocab pickle', vocab)
     # with open('vocab.pkl', 'wb') as fh:
     #    pickle.dump(vocab, fh)
 
-    with open('src_vocab.pkl', 'wb') as fh:
-       pickle.dump(vocab['src'], fh)
+    with open("src_vocab.pkl", "wb") as fh:
+        pickle.dump(vocab["src"], fh)
 
-    with open('tgt_vocab.pkl', 'wb') as fh:
-       pickle.dump(vocab['tgt'], fh)
+    with open("tgt_vocab.pkl", "wb") as fh:
+        pickle.dump(vocab["tgt"], fh)
 
-    #with open('indices_vocab.pkl', 'wb') as fh:
+    # with open('indices_vocab.pkl', 'wb') as fh:
     #    pickle.dump(fields['indices'], fh)
 
     # Avoid functionality on inference
     nmt_model_opt.update_vocab = False
     print(nmt_model_opt.generator_function)
-    model = build_tpr_swap_model(opt, nmt_model_opt, fields,
-                                 use_gpu(opt),
-                                 gpu_id=opt.gpu,
-                                 tpr_model_checkpoint=tpr_checkpoint,
-                                 nmt_model_checkpoint=nmt_model_ckpt)
+    model = build_tpr_swap_model(
+        opt,
+        nmt_model_opt,
+        fields,
+        use_gpu(opt),
+        gpu_id=opt.gpu,
+        tpr_model_checkpoint=tpr_checkpoint,
+        nmt_model_checkpoint=nmt_model_ckpt,
+    )
     if opt.fp32:
         model.float()
     elif opt.int8:
         if opt.gpu >= 0:
-            raise ValueError(
-                "Dynamic 8-bit quantization is not supported on GPU")
+            raise ValueError("Dynamic 8-bit quantization is not supported on GPU")
         torch.quantization.quantize_dynamic(model, inplace=True)
 
     model.encoder.eval()
     model.decoder.eval()
-    #model.eval()
+    # model.eval()
     model.generator.eval()
     model.training = False
     print(f"model.training={model.training}")
@@ -395,10 +400,15 @@ def load_tpr_test_model(opt, tpr_model_path=None, nmt_model_path=None):
     return fields, model, nmt_model_opt
 
 
-def build_tpr_swap_model(opt, nmt_model_opt,
-                         fields, gpu, gpu_id=None,
-                         tpr_model_checkpoint=None,
-                         nmt_model_checkpoint=None):
+def build_tpr_swap_model(
+    opt,
+    nmt_model_opt,
+    fields,
+    gpu,
+    gpu_id=None,
+    tpr_model_checkpoint=None,
+    nmt_model_checkpoint=None,
+):
     """Build a model from opts.
     Args:
         model_opt: the option loaded from checkpoint. It's important that
@@ -429,7 +439,7 @@ def build_tpr_swap_model(opt, nmt_model_opt,
         device = torch.device("cpu")
 
     # Build tpr_encoder.
-    tpr_encoder = onmt.model_builder.build_encoder(opt, encoder_type='tpr')
+    tpr_encoder = onmt.model_builder.build_encoder(opt, encoder_type="tpr")
     tpr_encoder.load_state_dict(tpr_model_checkpoint)
     print("LOADED TPR ENCODER")
 
@@ -445,10 +455,9 @@ def build_tpr_swap_model(opt, nmt_model_opt,
         else:
             gen_func = nn.LogSoftmax(dim=-1)
         generator = nn.Sequential(
-            nn.Linear(nmt_model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
+            nn.Linear(nmt_model_opt.dec_rnn_size, len(fields["tgt"].base_field.vocab)),
             Cast(torch.float32),
-            gen_func
+            gen_func,
         )
         if nmt_model_opt.share_decoder_embeddings:
             generator[0].weight = nmt_decoder.embeddings.word_lut.weight
@@ -479,26 +488,27 @@ def build_tpr_swap_model(opt, nmt_model_opt,
 
         if hasattr(nmt_model, "encoder") and hasattr(nmt_model.encoder, "embeddings"):
             nmt_model.encoder.embeddings.load_pretrained_vectors(
-                nmt_model_opt.pre_word_vecs_enc)
-        if hasattr(nmt_model.decoder, 'embeddings'):
+                nmt_model_opt.pre_word_vecs_enc
+            )
+        if hasattr(nmt_model.decoder, "embeddings"):
             nmt_model.decoder.embeddings.load_pretrained_vectors(
-                nmt_model_opt.pre_word_vecs_dec)
+                nmt_model_opt.pre_word_vecs_dec
+            )
 
     if nmt_model_checkpoint is not None:
         # This preserves backward-compat for models using customed layernorm
         def fix_key(s):
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.b_2',
-                       r'\1.layer_norm\2.bias', s)
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.a_2',
-                       r'\1.layer_norm\2.weight', s)
+            s = re.sub(r"(.*)\.layer_norm((_\d+)?)\.b_2", r"\1.layer_norm\2.bias", s)
+            s = re.sub(r"(.*)\.layer_norm((_\d+)?)\.a_2", r"\1.layer_norm\2.weight", s)
             return s
 
-        nmt_model_checkpoint['model'] = {fix_key(k): v
-                               for k, v in nmt_model_checkpoint['model'].items()}
+        nmt_model_checkpoint["model"] = {
+            fix_key(k): v for k, v in nmt_model_checkpoint["model"].items()
+        }
         # end of patch for backward compatibility
 
-        nmt_model.load_state_dict(nmt_model_checkpoint['model'], strict=False)
-        generator.load_state_dict(nmt_model_checkpoint['generator'], strict=False)
+        nmt_model.load_state_dict(nmt_model_checkpoint["model"], strict=False)
+        generator.load_state_dict(nmt_model_checkpoint["generator"], strict=False)
 
     nmt_decoder = nmt_model.decoder
 
@@ -506,14 +516,14 @@ def build_tpr_swap_model(opt, nmt_model_opt,
     tpr_model.generator = generator
 
     tpr_model.to(device)
-    if nmt_model_opt.model_dtype == 'fp16' and nmt_model_opt.optim == 'fusedadam':
+    if nmt_model_opt.model_dtype == "fp16" and nmt_model_opt.optim == "fusedadam":
         tpr_model.half()
 
     return tpr_model
 
 
 def build_model(model_opt, opt, fields, checkpoint):
-    logger.info('Building model...')
+    logger.info("Building model...")
     model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint)
     logger.info(model)
     return model

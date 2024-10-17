@@ -34,6 +34,7 @@ def vid_len(path):
 
 class VidDset(object):
     """For each video, yield its frames."""
+
     def __init__(self, model, root_dir, filenames):
         self.root_dir = root_dir
         self.filenames = filenames
@@ -47,8 +48,10 @@ class VidDset(object):
 
     def __getitem__(self, i):
         path = self.paths[i]
-        return ((path, idx, self.xform(Image.fromarray(img)))
-                for img, idx in read_to_imgs(path))
+        return (
+            (path, idx, self.xform(Image.fromarray(img)))
+            for img, idx in read_to_imgs(path)
+        )
 
     def __iter__(self):
         return self
@@ -90,14 +93,14 @@ def batch(dset, batch_size):
 
 class FeatureExtractor(nn.Module):
     """Extract feature vectors from a batch of frames."""
+
     def __init__(self):
         super(FeatureExtractor, self).__init__()
         self.model = pretrainedmodels.resnet152()
         self.FEAT_SIZE = 2048
 
     def forward(self, x):
-        return self.model.avgpool(
-            self.model.features(x)).view(-1, 1, self.FEAT_SIZE)
+        return self.model.avgpool(self.model.features(x)).view(-1, 1, self.FEAT_SIZE)
 
 
 class Reconstructor(object):
@@ -138,13 +141,14 @@ class Reconstructor(object):
                 these_finished_seq_feats = feats[start:i]
                 if self.feats is not None:
                     all_last_seq_feats = torch.cat(
-                        [self.feats, these_finished_seq_feats], 0)
+                        [self.feats, these_finished_seq_feats], 0
+                    )
                 else:
                     all_last_seq_feats = these_finished_seq_feats
                 if i - 1 < 0:
                     name = self.path
                 else:
-                    name = paths[i-1]
+                    name = paths[i - 1]
                 save_path, vid_id = self.name(name)
                 self.save(save_path, all_last_seq_feats)
                 n_feats = all_last_seq_feats.shape[0]
@@ -184,19 +188,16 @@ def finished_watcher(finished_queue, world_size, root_dir, files):
                 pbar.update(n_these_frames)
 
 
-def run(device_id, world_size, root_dir, batch_size_per_device,
-        feats_queue, files):
+def run(device_id, world_size, root_dir, batch_size_per_device, feats_queue, files):
     """Process a disjoint subset of the videos on each device."""
     if world_size > 1:
-        these_files = [f for i, f in enumerate(files)
-                       if i % world_size == device_id]
+        these_files = [f for i, f in enumerate(files) if i % world_size == device_id]
     else:
         these_files = files
 
     fe = FeatureExtractor()
     dset = VidDset(fe.model, root_dir, these_files)
-    dev = torch.device("cuda", device_id) \
-        if device_id >= 0 else torch.device("cpu")
+    dev = torch.device("cuda", device_id) if device_id >= 0 else torch.device("cpu")
     fe.to(dev)
     fe = fe.eval()
     with torch.no_grad():
@@ -228,12 +229,15 @@ def saver(out_path, feats_queue, finished_queue):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", type=str, required=True,
-                        help="Directory of videos.")
-    parser.add_argument("--out_dir", type=str, required=True,
-                        help="Directory for output features.")
-    parser.add_argument("--world_size", type=int, default=1,
-                        help="Number of devices to run on.")
+    parser.add_argument(
+        "--root_dir", type=str, required=True, help="Directory of videos."
+    )
+    parser.add_argument(
+        "--out_dir", type=str, required=True, help="Directory for output features."
+    )
+    parser.add_argument(
+        "--world_size", type=int, default=1, help="Number of devices to run on."
+    )
     parser.add_argument("--batch_size_per_device", type=int, default=512)
     opt = parser.parse_args()
 
@@ -252,48 +256,70 @@ if __name__ == "__main__":
     mp = torch.multiprocessing.get_context("spawn")
     procs = []
 
-    print("Starting processing. Progress bar startup can take some time, but "
-          "processing will start in the meantime.")
+    print(
+        "Starting processing. Progress bar startup can take some time, but "
+        "processing will start in the meantime."
+    )
 
     files = list(sorted(list(os.listdir(root_dir))))
-    files = [f for f in files
-             if os.path.basename(Reconstructor.name_(f, out_path)[0])
-             not in os.listdir(out_path)]
+    files = [
+        f
+        for f in files
+        if os.path.basename(Reconstructor.name_(f, out_path)[0])
+        not in os.listdir(out_path)
+    ]
 
-    procs.append(mp.Process(
-        target=finished_watcher,
-        args=(finished_queue, world_size, root_dir, files),
-        daemon=False
-    ))
+    procs.append(
+        mp.Process(
+            target=finished_watcher,
+            args=(finished_queue, world_size, root_dir, files),
+            daemon=False,
+        )
+    )
     procs[0].start()
 
     if world_size >= 1:
         feat_queues = [manager.Queue(2) for _ in range(world_size)]
         for feats_queue, device_id in zip(feat_queues, range(world_size)):
             # each device has its own saver so that reconstructing is easier
-            procs.append(mp.Process(
-                target=run,
-                args=(device_id, world_size, root_dir,
-                      batch_size_per_device, feats_queue, files),
-                daemon=True))
+            procs.append(
+                mp.Process(
+                    target=run,
+                    args=(
+                        device_id,
+                        world_size,
+                        root_dir,
+                        batch_size_per_device,
+                        feats_queue,
+                        files,
+                    ),
+                    daemon=True,
+                )
+            )
             procs[-1].start()
-            procs.append(mp.Process(
-                target=saver,
-                args=(out_path, feats_queue, finished_queue),
-                daemon=True))
+            procs.append(
+                mp.Process(
+                    target=saver,
+                    args=(out_path, feats_queue, finished_queue),
+                    daemon=True,
+                )
+            )
             procs[-1].start()
     else:
         feats_queue = manager.Queue()
-        procs.append(mp.Process(
-            target=run,
-            args=(-1, 1, root_dir,
-                  batch_size_per_device, feats_queue, files),
-            daemon=True))
+        procs.append(
+            mp.Process(
+                target=run,
+                args=(-1, 1, root_dir, batch_size_per_device, feats_queue, files),
+                daemon=True,
+            )
+        )
         procs[-1].start()
-        procs.append(mp.Process(
-            target=saver,
-            args=(out_path, feats_queue, finished_queue),
-            daemon=True))
+        procs.append(
+            mp.Process(
+                target=saver, args=(out_path, feats_queue, finished_queue), daemon=True
+            )
+        )
         procs[-1].start()
 
     for p in procs:

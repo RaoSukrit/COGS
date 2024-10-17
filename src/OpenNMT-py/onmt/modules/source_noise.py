@@ -8,8 +8,7 @@ def aeq(ref, *args):
 
 
 class NoiseBase(object):
-    def __init__(self, prob, pad_idx=1, device_id="cpu",
-                 ids_to_noise=[], **kwargs):
+    def __init__(self, prob, pad_idx=1, device_id="cpu", ids_to_noise=[], **kwargs):
         self.prob = prob
         self.pad_idx = 1
         self.skip_first = 1
@@ -23,16 +22,19 @@ class NoiseBase(object):
         return t.to(torch.device(self.device_id))
 
     def noise_batch(self, batch):
-        source, lengths = batch.src if isinstance(batch.src, tuple) \
+        source, lengths = (
+            batch.src
+            if isinstance(batch.src, tuple)
             else (batch.src, [None] * batch.src.size(1))
+        )
         # noise_skip = batch.noise_skip
         # aeq(len(batch.noise_skip) == source.size(1))
 
         # source is [src_len x bs x feats]
-        skipped = source[:self.skip_first, :, :]
-        source = source[self.skip_first:]
+        skipped = source[: self.skip_first, :, :]
+        source = source[self.skip_first :]
         for i in range(source.size(1)):
-            if hasattr(batch, 'corpus_id'):
+            if hasattr(batch, "corpus_id"):
                 corpus_id = batch.corpus_id[i]
                 if corpus_id.item() not in self.ids_to_noise:
                     continue
@@ -40,8 +42,7 @@ class NoiseBase(object):
             mask = tokens.ne(self.pad_idx)
 
             masked_tokens = tokens[mask]
-            noisy_tokens, length = self.noise_source(
-                masked_tokens, length=lengths[i])
+            noisy_tokens, length = self.noise_source(masked_tokens, length=lengths[i])
 
             lengths[i] = length
 
@@ -49,14 +50,12 @@ class NoiseBase(object):
             # tensor
             delta = length - (source.size(0) - self.skip_first)
             if delta > 0:
-                pad = torch.ones([delta],
-                                 device=source.device,
-                                 dtype=source.dtype)
+                pad = torch.ones([delta], device=source.device, dtype=source.dtype)
                 pad *= self.pad_idx
                 pad = pad.unsqueeze(1).expand(-1, 15).unsqueeze(2)
 
                 source = torch.cat([source, source])
-            source[:noisy_tokens.size(0), i, 0] = noisy_tokens
+            source[: noisy_tokens.size(0), i, 0] = noisy_tokens
 
         source = torch.cat([skipped, source])
 
@@ -74,6 +73,7 @@ class NoiseBase(object):
 class MaskNoise(NoiseBase):
     def noise_batch(self, batch):
         raise ValueError("MaskNoise has not been updated to tensor noise")
+
     # def s(self, tokens):
     #     prob = self.prob
     #     r = torch.rand([len(tokens)])
@@ -122,17 +122,17 @@ class SenShufflingNoise(NoiseBase):
 
         index = 0
         for i in ordering:
-            sentence = source[(sentence_ends[i - 1] if i >
-                               0 else 1):sentence_ends[i]]
-            result[index:index + sentence.size(0)] = sentence
+            sentence = source[(sentence_ends[i - 1] if i > 0 else 1) : sentence_ends[i]]
+            result[index : index + sentence.size(0)] = sentence
             index += sentence.size(0)
         # aeq(source.size(0), length)
         return result, length
 
 
 class InfillingNoise(NoiseBase):
-    def __init__(self, *args, infilling_poisson_lambda=3.0,
-                 word_start_mask=None, **kwargs):
+    def __init__(
+        self, *args, infilling_poisson_lambda=3.0, word_start_mask=None, **kwargs
+    ):
         super(InfillingNoise, self).__init__(*args, **kwargs)
         self.poisson_lambda = infilling_poisson_lambda
         self.mask_span_distribution = self._make_poisson(self.poisson_lambda)
@@ -156,7 +156,7 @@ class InfillingNoise(NoiseBase):
         for k in range(0, 128):
             ps.append(e_to_the_minus_lambda * lambda_to_the_k / k_factorial)
             lambda_to_the_k *= _lambda
-            k_factorial *= (k + 1)
+            k_factorial *= k + 1
             if ps[-1] < 0.0000001:
                 break
         ps = torch.tensor(ps, device=torch.device(self.device_id))
@@ -187,17 +187,18 @@ class InfillingNoise(NoiseBase):
             return source
 
         if self.mask_span_distribution is not None:
-            lengths = self.mask_span_distribution.sample(
-                sample_shape=(num_to_mask,))
+            lengths = self.mask_span_distribution.sample(sample_shape=(num_to_mask,))
 
             # Make sure we have enough to mask
             cum_length = torch.cumsum(lengths, 0)
             while cum_length[-1] < num_to_mask:
-                lengths = torch.cat([
-                    lengths,
-                    self.mask_span_distribution.sample(
-                        sample_shape=(num_to_mask,))
-                ], dim=0)
+                lengths = torch.cat(
+                    [
+                        lengths,
+                        self.mask_span_distribution.sample(sample_shape=(num_to_mask,)),
+                    ],
+                    dim=0,
+                )
                 cum_length = torch.cumsum(lengths, 0)
 
             # Trim to masking budget
@@ -213,24 +214,21 @@ class InfillingNoise(NoiseBase):
             num_inserts = num_to_mask - lengths.size(0)
             num_to_mask -= num_inserts
             if num_to_mask == 0:
-                return self.add_insertion_noise(
-                    source, num_inserts / source.size(0))
+                return self.add_insertion_noise(source, num_inserts / source.size(0))
             # assert (lengths > 0).all()
         else:
             raise ValueError("Not supposed to be there")
             lengths = torch.ones((num_to_mask,), device=source.device).long()
         # assert is_word_start[-1] == 0
         word_starts = is_word_start.nonzero()
-        indices = word_starts[torch.randperm(word_starts.size(0))[
-            :num_to_mask]].squeeze(1)
+        indices = word_starts[
+            torch.randperm(word_starts.size(0))[:num_to_mask]
+        ].squeeze(1)
 
         source_length = source.size(0)
         # TODO why?
         # assert source_length - 1 not in indices
-        to_keep = torch.ones(
-            source_length,
-            dtype=torch.bool,
-            device=source.device)
+        to_keep = torch.ones(source_length, dtype=torch.bool, device=source.device)
 
         is_word_start = is_word_start.long()
         # acts as a long length, so spans don't go over the end of doc
@@ -285,8 +283,7 @@ class InfillingNoise(NoiseBase):
         source = source[to_keep]
 
         if num_inserts > 0:
-            source = self.add_insertion_noise(
-                source, num_inserts / source.size(0))
+            source = self.add_insertion_noise(source, num_inserts / source.size(0))
 
         # aeq(source.eq(self.pad_idx).long().sum(), 0)
         final_length = source.size(0)
@@ -301,15 +298,12 @@ class InfillingNoise(NoiseBase):
 
         noise_indices = torch.randperm(num_tokens + n - 2)[:n] + 1
         noise_mask = torch.zeros(
-            size=(
-                num_tokens + n,
-            ),
-            dtype=torch.bool,
-            device=tokens.device)
+            size=(num_tokens + n,), dtype=torch.bool, device=tokens.device
+        )
         noise_mask[noise_indices] = 1
-        result = torch.ones([n + len(tokens)],
-                            dtype=torch.long,
-                            device=tokens.device) * -1
+        result = (
+            torch.ones([n + len(tokens)], dtype=torch.long, device=tokens.device) * -1
+        )
 
         # random ratio disabled
         # num_random = int(math.ceil(n * self.random_ratio))
@@ -327,7 +321,7 @@ class MultiNoise(NoiseBase):
     NOISES = {
         "sen_shuffling": SenShufflingNoise,
         "infilling": InfillingNoise,
-        "mask": MaskNoise
+        "mask": MaskNoise,
     }
 
     def __init__(self, noises=[], probs=[], **kwargs):
@@ -345,6 +339,5 @@ class MultiNoise(NoiseBase):
 
     def noise_source(self, source, length=None, **kwargs):
         for noise in self.noises:
-            source, length = noise.noise_source(
-                source, length=length, **kwargs)
+            source, length = noise.noise_source(source, length=length, **kwargs)
         return source, length

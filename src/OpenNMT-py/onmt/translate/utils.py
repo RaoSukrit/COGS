@@ -5,37 +5,41 @@ from onmt.translate import GNMTGlobalScorer, Translator
 from onmt.opts import translate_opts
 
 
-class Detokenizer():
-    """ Allow detokenizing sequences in batchs"""
+class Detokenizer:
+    """Allow detokenizing sequences in batchs"""
+
     def __init__(self, opt):
-        if 'bpe' in opt.transforms:
+        if "bpe" in opt.transforms:
             self.type = "subword-nmt"
-        elif 'sentencepiece' in opt.transforms:
+        elif "sentencepiece" in opt.transforms:
             self.type = "sentencepiece"
-        elif 'onmt_tokenize' in opt.transforms:
+        elif "onmt_tokenize" in opt.transforms:
             self.type = "pyonmttok"
             self.tgt_onmttok_kwargs = opt.tgt_onmttok_kwargs
         else:
             self.type = None
-        if self.type in ['bpe', 'sentencepiece']:
+        if self.type in ["bpe", "sentencepiece"]:
             if opt.tgt_subword_model is None:
                 raise ValueError(
-                    "Missing mandatory tokenizer option 'tgt_subword_model'")
+                    "Missing mandatory tokenizer option 'tgt_subword_model'"
+                )
             else:
                 self.model_path = opt.tgt_subword_model
 
     def build_detokenizer(self):
         if self.type == "pyonmttok":
             import pyonmttok
-            self.tgt_detokenizer = pyonmttok.Tokenizer(
-                **self.tgt_onmttok_kwargs)
+
+            self.tgt_detokenizer = pyonmttok.Tokenizer(**self.tgt_onmttok_kwargs)
         elif self.type == "sentencepiece":
             import sentencepiece as spm
+
             self.tgt_detokenizer = spm.SentencePieceProcessor()
             self.tgt_detokenizer.Load(self.model_path)
         elif self.type == "subword-nmt":
             from subword_nmt.apply_bpe import BPE
-            with open(self.model_path, encoding='utf-8') as tgt_codes:
+
+            with open(self.model_path, encoding="utf-8") as tgt_codes:
                 self.tgt_detokenizer = BPE(codes=tgt_codes, vocab=None)
         else:
             self.tgt_detokenizer = None
@@ -53,9 +57,10 @@ class Detokenizer():
         return detok
 
 
-class ScoringPreparator():
+class ScoringPreparator:
     """Allow the calculation of metrics via the Trainer's
-     training_eval_handler method"""
+    training_eval_handler method"""
+
     def __init__(self, fields, opt):
         self.fields = fields
         self.opt = opt
@@ -80,15 +85,15 @@ class ScoringPreparator():
     def build_sources_and_refs(self, batch, mode):
         """Reconstruct the sources and references of the examples
         related to a batch"""
-        if mode == 'valid':
+        if mode == "valid":
             sources = []
             refs = []
             for example in batch.dataset.examples:
                 sources.append(example.src[0])
                 refs.append(example.tgt[0])
-        elif mode == 'train':
-            sources = self.tokenize_batch(batch.src[0], 'src')
-            refs = self.tokenize_batch(batch.tgt, 'tgt')
+        elif mode == "train":
+            sources = self.tokenize_batch(batch.src[0], "src")
+            refs = self.tokenize_batch(batch.tgt, "tgt")
         return sources, refs
 
     def translate(self, model, batch, gpu_rank, step, mode):
@@ -97,7 +102,7 @@ class ScoringPreparator():
         model_opt = self.opt
         parser = ArgumentParser()
         translate_opts(parser)
-        base_args = (["-model", "dummy"] + ["-src", "dummy"])
+        base_args = ["-model", "dummy"] + ["-src", "dummy"]
         opt = parser.parse_args(base_args)
         opt.gpu = gpu_rank
         ArgumentParser.validate_translate_opts(opt)
@@ -114,12 +119,14 @@ class ScoringPreparator():
             out_file=out_file,
             report_align=opt.report_align,
             report_score=True,
-            logger=None)
+            logger=None,
+        )
         sources, refs = self.build_sources_and_refs(batch, mode)
         _, preds = translator.translate(
             sources,
             batch_size=model_opt.valid_batch_size,
-            batch_type=model_opt.batch_type)
+            batch_type=model_opt.batch_type,
+        )
         texts_ref = []
 
         for i in range(len(preds)):
@@ -127,9 +134,9 @@ class ScoringPreparator():
             texts_ref.append(self.tgt_detokenizer._detokenize(refs[i]))
 
         if len(preds) > 0 and self.opt.scoring_debug:
-            path = os.path.join(self.opt.dump_preds,
-                                "preds.{}_step_{}.{}".format(
-                                    mode, step, "txt"))
+            path = os.path.join(
+                self.opt.dump_preds, "preds.{}_step_{}.{}".format(mode, step, "txt")
+            )
             with open(path, "a") as file:
                 for i in range(len(preds)):
                     file.write("SOURCE: {}\n".format(sources[i]))

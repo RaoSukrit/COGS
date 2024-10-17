@@ -41,8 +41,7 @@ class ImageDataReader(DataReaderBase):
     @classmethod
     def _check_deps(cls):
         if any([Image is None, transforms is None, cv2 is None]):
-            cls._raise_missing_dep(
-                "PIL", "torchvision", "cv2")
+            cls._raise_missing_dep("PIL", "torchvision", "cv2")
 
     def read(self, images, side, img_dir=None):
         """Read data into dicts.
@@ -68,19 +67,18 @@ class ImageDataReader(DataReaderBase):
             if not os.path.exists(img_path):
                 img_path = filename
 
-            assert os.path.exists(img_path), \
-                'img path %s not found' % filename
+            assert os.path.exists(img_path), "img path %s not found" % filename
 
             if self.channel_size == 1:
-                img = transforms.ToTensor()(
-                    Image.fromarray(cv2.imread(img_path, 0)))
+                img = transforms.ToTensor()(Image.fromarray(cv2.imread(img_path, 0)))
             else:
                 img = transforms.ToTensor()(Image.open(img_path))
             if self.truncate and self.truncate != (0, 0):
-                if not (img.size(1) <= self.truncate[0]
-                        and img.size(2) <= self.truncate[1]):
+                if not (
+                    img.size(1) <= self.truncate[0] and img.size(2) <= self.truncate[1]
+                ):
                     continue
-            yield {side: img, side + '_path': filename, 'indices': i}
+            yield {side: img, side + "_path": filename, "indices": i}
 
 
 def img_sort_key(ex):
@@ -95,12 +93,12 @@ def batch_img(data, vocab):
     w = max([t.size(2) for t in data])
     imgs = torch.zeros(len(data), c, h, w).fill_(1)
     for i, img in enumerate(data):
-        imgs[i, :, 0:img.size(1), 0:img.size(2)] = img
+        imgs[i, :, 0 : img.size(1), 0 : img.size(2)] = img
     return imgs
 
 
 def image_fields(**kwargs):
     img = Field(
-        use_vocab=False, dtype=torch.float,
-        postprocessing=batch_img, sequential=False)
+        use_vocab=False, dtype=torch.float, postprocessing=batch_img, sequential=False
+    )
     return img

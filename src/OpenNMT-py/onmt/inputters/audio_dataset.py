@@ -35,8 +35,15 @@ class AudioDataReader(DataReaderBase):
             importing any of ``torchaudio``, ``librosa``, or ``numpy`` fail.
     """
 
-    def __init__(self, sample_rate=0, window_size=0, window_stride=0,
-                 window=None, normalize_audio=True, truncate=None):
+    def __init__(
+        self,
+        sample_rate=0,
+        window_size=0,
+        window_stride=0,
+        window=None,
+        normalize_audio=True,
+        truncate=None,
+    ):
         self._check_deps()
         self.sample_rate = sample_rate
         self.window_size = window_size
@@ -47,14 +54,17 @@ class AudioDataReader(DataReaderBase):
 
     @classmethod
     def from_opt(cls, opt):
-        return cls(sample_rate=opt.sample_rate, window_size=opt.window_size,
-                   window_stride=opt.window_stride, window=opt.window)
+        return cls(
+            sample_rate=opt.sample_rate,
+            window_size=opt.window_size,
+            window_stride=opt.window_stride,
+            window=opt.window,
+        )
 
     @classmethod
     def _check_deps(cls):
         if any([torchaudio is None, librosa is None, np is None]):
-            cls._raise_missing_dep(
-                "torchaudio", "librosa", "numpy")
+            cls._raise_missing_dep("torchaudio", "librosa", "numpy")
 
     def extract_features(self, audio_path):
         # torchaudio loading options recently changed. It's probably
@@ -64,11 +74,15 @@ class AudioDataReader(DataReaderBase):
         sound, sample_rate_ = torchaudio.legacy.load(audio_path)
         if self.truncate and self.truncate > 0:
             if sound.size(0) > self.truncate:
-                sound = sound[:self.truncate]
+                sound = sound[: self.truncate]
 
-        assert sample_rate_ == self.sample_rate, \
-            'Sample rate of %s != -sample_rate (%d vs %d)' \
-            % (audio_path, sample_rate_, self.sample_rate)
+        assert (
+            sample_rate_ == self.sample_rate
+        ), "Sample rate of %s != -sample_rate (%d vs %d)" % (
+            audio_path,
+            sample_rate_,
+            self.sample_rate,
+        )
 
         sound = sound.numpy()
         if len(sound.shape) > 1:
@@ -81,8 +95,13 @@ class AudioDataReader(DataReaderBase):
         win_length = n_fft
         hop_length = int(self.sample_rate * self.window_stride)
         # STFT
-        d = librosa.stft(sound, n_fft=n_fft, hop_length=hop_length,
-                         win_length=win_length, window=self.window)
+        d = librosa.stft(
+            sound,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=self.window,
+        )
         spect, _ = librosa.magphase(d)
         spect = np.log1p(spect)
         spect = torch.FloatTensor(spect)
@@ -109,8 +128,9 @@ class AudioDataReader(DataReaderBase):
             A dictionary containing audio data for each line.
         """
 
-        assert src_dir is not None and os.path.exists(src_dir),\
-            "src_dir must be a valid directory if data_type is audio"
+        assert src_dir is not None and os.path.exists(
+            src_dir
+        ), "src_dir must be a valid directory if data_type is audio"
 
         if isinstance(data, str):
             data = DataReaderBase._read_file(data)
@@ -121,11 +141,10 @@ class AudioDataReader(DataReaderBase):
             if not os.path.exists(audio_path):
                 audio_path = line
 
-            assert os.path.exists(audio_path), \
-                'audio path %s not found' % line
+            assert os.path.exists(audio_path), "audio path %s not found" % line
 
             spect = self.extract_features(audio_path)
-            yield {side: spect, side + '_path': line, 'indices': i}
+            yield {side: spect, side + "_path": line, "indices": i}
 
 
 def audio_sort_key(ex):
@@ -139,17 +158,34 @@ class AudioSeqField(Field):
     See :class:`Fields` for attribute descriptions.
     """
 
-    def __init__(self, preprocessing=None, postprocessing=None,
-                 include_lengths=False, batch_first=False, pad_index=0,
-                 is_target=False):
+    def __init__(
+        self,
+        preprocessing=None,
+        postprocessing=None,
+        include_lengths=False,
+        batch_first=False,
+        pad_index=0,
+        is_target=False,
+    ):
         super(AudioSeqField, self).__init__(
-            sequential=True, use_vocab=False, init_token=None,
-            eos_token=None, fix_length=False, dtype=torch.float,
-            preprocessing=preprocessing, postprocessing=postprocessing,
-            lower=False, tokenize=None, include_lengths=include_lengths,
-            batch_first=batch_first, pad_token=pad_index, unk_token=None,
-            pad_first=False, truncate_first=False, stop_words=None,
-            is_target=is_target
+            sequential=True,
+            use_vocab=False,
+            init_token=None,
+            eos_token=None,
+            fix_length=False,
+            dtype=torch.float,
+            preprocessing=preprocessing,
+            postprocessing=postprocessing,
+            lower=False,
+            tokenize=None,
+            include_lengths=include_lengths,
+            batch_first=batch_first,
+            pad_token=pad_index,
+            unk_token=None,
+            pad_first=False,
+            truncate_first=False,
+            stop_words=None,
+            is_target=is_target,
         )
 
     def pad(self, minibatch):
@@ -166,8 +202,12 @@ class AudioSeqField(Field):
                 else just returns the padded tensor.
         """
 
-        assert not self.pad_first and not self.truncate_first \
-            and not self.fix_length and self.sequential
+        assert (
+            not self.pad_first
+            and not self.truncate_first
+            and not self.fix_length
+            and self.sequential
+        )
         minibatch = list(minibatch)
         lengths = [x.size(1) for x in minibatch]
         max_len = max(lengths)
@@ -197,9 +237,11 @@ class AudioSeqField(Field):
 
         assert self.use_vocab is False
         if self.include_lengths and not isinstance(arr, tuple):
-            raise ValueError("Field has include_lengths set to True, but "
-                             "input data is not a tuple of "
-                             "(data batch, batch lengths).")
+            raise ValueError(
+                "Field has include_lengths set to True, but "
+                "input data is not a tuple of "
+                "(data batch, batch lengths)."
+            )
         if isinstance(arr, tuple):
             arr, lengths = arr
             lengths = torch.tensor(lengths, dtype=torch.int, device=device)

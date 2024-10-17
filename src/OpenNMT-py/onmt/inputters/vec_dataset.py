@@ -49,12 +49,10 @@ class VecDataReader(DataReaderBase):
             if not os.path.exists(vec_path):
                 vec_path = filename
 
-            assert os.path.exists(vec_path), \
-                'vec path %s not found' % filename
+            assert os.path.exists(vec_path), "vec path %s not found" % filename
 
             vec = np.load(vec_path)
-            yield {side: torch.from_numpy(vec),
-                   side + "_path": filename, "indices": i}
+            yield {side: torch.from_numpy(vec), side + "_path": filename, "indices": i}
 
 
 def vec_sort_key(ex):
@@ -67,17 +65,34 @@ class VecSeqField(Field):
     See :class:`Fields` for attribute descriptions.
     """
 
-    def __init__(self, preprocessing=None, postprocessing=None,
-                 include_lengths=False, batch_first=False, pad_index=0,
-                 is_target=False):
+    def __init__(
+        self,
+        preprocessing=None,
+        postprocessing=None,
+        include_lengths=False,
+        batch_first=False,
+        pad_index=0,
+        is_target=False,
+    ):
         super(VecSeqField, self).__init__(
-            sequential=True, use_vocab=False, init_token=None,
-            eos_token=None, fix_length=False, dtype=torch.float,
-            preprocessing=preprocessing, postprocessing=postprocessing,
-            lower=False, tokenize=None, include_lengths=include_lengths,
-            batch_first=batch_first, pad_token=pad_index, unk_token=None,
-            pad_first=False, truncate_first=False, stop_words=None,
-            is_target=is_target
+            sequential=True,
+            use_vocab=False,
+            init_token=None,
+            eos_token=None,
+            fix_length=False,
+            dtype=torch.float,
+            preprocessing=preprocessing,
+            postprocessing=postprocessing,
+            lower=False,
+            tokenize=None,
+            include_lengths=include_lengths,
+            batch_first=batch_first,
+            pad_token=pad_index,
+            unk_token=None,
+            pad_first=False,
+            truncate_first=False,
+            stop_words=None,
+            is_target=is_target,
         )
 
     def pad(self, minibatch):
@@ -94,15 +109,18 @@ class VecSeqField(Field):
                 else just returns the padded tensor.
         """
 
-        assert not self.pad_first and not self.truncate_first \
-            and not self.fix_length and self.sequential
+        assert (
+            not self.pad_first
+            and not self.truncate_first
+            and not self.fix_length
+            and self.sequential
+        )
         minibatch = list(minibatch)
         lengths = [x.size(0) for x in minibatch]
         max_len = max(lengths)
         nfeats = minibatch[0].size(1)
         feat_dim = minibatch[0].size(2)
-        feats = torch.full((len(minibatch), max_len, nfeats, feat_dim),
-                           self.pad_token)
+        feats = torch.full((len(minibatch), max_len, nfeats, feat_dim), self.pad_token)
         for i, (feat, len_) in enumerate(zip(minibatch, lengths)):
             feats[i, 0:len_, :, :] = feat
         if self.include_lengths:
@@ -123,9 +141,11 @@ class VecSeqField(Field):
 
         assert self.use_vocab is False
         if self.include_lengths and not isinstance(arr, tuple):
-            raise ValueError("Field has include_lengths set to True, but "
-                             "input data is not a tuple of "
-                             "(data batch, batch lengths).")
+            raise ValueError(
+                "Field has include_lengths set to True, but "
+                "input data is not a tuple of "
+                "(data batch, batch lengths)."
+            )
         if isinstance(arr, tuple):
             arr, lengths = arr
             lengths = torch.tensor(lengths, dtype=torch.int, device=device)

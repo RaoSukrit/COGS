@@ -1,4 +1,5 @@
 """Audio encoder"""
+
 import math
 
 import torch.nn as nn
@@ -27,9 +28,19 @@ class AudioEncoder(EncoderBase):
         window_size (int): input spec
     """
 
-    def __init__(self, rnn_type, enc_layers, dec_layers, brnn,
-                 enc_rnn_size, dec_rnn_size, enc_pooling, dropout,
-                 sample_rate, window_size):
+    def __init__(
+        self,
+        rnn_type,
+        enc_layers,
+        dec_layers,
+        brnn,
+        enc_rnn_size,
+        dec_rnn_size,
+        enc_pooling,
+        dropout,
+        sample_rate,
+        window_size,
+    ):
         super(AudioEncoder, self).__init__()
         self.enc_layers = enc_layers
         self.rnn_type = rnn_type
@@ -44,7 +55,7 @@ class AudioEncoder(EncoderBase):
         self.dec_rnn_size_real = dec_rnn_size_real
         self.dec_rnn_size = dec_rnn_size
         input_size = int(math.floor((sample_rate * window_size) / 2) + 1)
-        enc_pooling = enc_pooling.split(',')
+        enc_pooling = enc_pooling.split(",")
         assert len(enc_pooling) == enc_layers or len(enc_pooling) == 1
         if len(enc_pooling) == 1:
             enc_pooling = enc_pooling * enc_layers
@@ -59,27 +70,28 @@ class AudioEncoder(EncoderBase):
             self.dropout = None
         self.W = nn.Linear(enc_rnn_size, dec_rnn_size, bias=False)
         self.batchnorm_0 = nn.BatchNorm1d(enc_rnn_size, affine=True)
-        self.rnn_0, self.no_pack_padded_seq = \
-            rnn_factory(rnn_type,
-                        input_size=input_size,
-                        hidden_size=enc_rnn_size_real,
-                        num_layers=1,
-                        dropout=dropout[0],
-                        bidirectional=brnn)
+        self.rnn_0, self.no_pack_padded_seq = rnn_factory(
+            rnn_type,
+            input_size=input_size,
+            hidden_size=enc_rnn_size_real,
+            num_layers=1,
+            dropout=dropout[0],
+            bidirectional=brnn,
+        )
         self.pool_0 = nn.MaxPool1d(enc_pooling[0])
         for l in range(enc_layers - 1):
             batchnorm = nn.BatchNorm1d(enc_rnn_size, affine=True)
-            rnn, _ = \
-                rnn_factory(rnn_type,
-                            input_size=enc_rnn_size,
-                            hidden_size=enc_rnn_size_real,
-                            num_layers=1,
-                            dropout=dropout[0],
-                            bidirectional=brnn)
-            setattr(self, 'rnn_%d' % (l + 1), rnn)
-            setattr(self, 'pool_%d' % (l + 1),
-                    nn.MaxPool1d(enc_pooling[l + 1]))
-            setattr(self, 'batchnorm_%d' % (l + 1), batchnorm)
+            rnn, _ = rnn_factory(
+                rnn_type,
+                input_size=enc_rnn_size,
+                hidden_size=enc_rnn_size_real,
+                num_layers=1,
+                dropout=dropout[0],
+                bidirectional=brnn,
+            )
+            setattr(self, "rnn_%d" % (l + 1), rnn)
+            setattr(self, "pool_%d" % (l + 1), nn.MaxPool1d(enc_pooling[l + 1]))
+            setattr(self, "batchnorm_%d" % (l + 1), batchnorm)
 
     @classmethod
     def from_opt(cls, opt, embeddings=None):
@@ -96,20 +108,20 @@ class AudioEncoder(EncoderBase):
             opt.audio_enc_pooling,
             opt.dropout,
             opt.sample_rate,
-            opt.window_size)
+            opt.window_size,
+        )
 
     def forward(self, src, lengths=None):
         """See :func:`onmt.encoders.encoder.EncoderBase.forward()`"""
         batch_size, _, nfft, t = src.size()
-        src = src.transpose(0, 1).transpose(0, 3).contiguous() \
-                 .view(t, batch_size, nfft)
+        src = src.transpose(0, 1).transpose(0, 3).contiguous().view(t, batch_size, nfft)
         orig_lengths = lengths
         lengths = lengths.view(-1).tolist()
 
         for l in range(self.enc_layers):
-            rnn = getattr(self, 'rnn_%d' % l)
-            pool = getattr(self, 'pool_%d' % l)
-            batchnorm = getattr(self, 'batchnorm_%d' % l)
+            rnn = getattr(self, "rnn_%d" % l)
+            pool = getattr(self, "pool_%d" % l)
+            batchnorm = getattr(self, "batchnorm_%d" % l)
             stride = self.enc_pooling[l]
             packed_emb = pack(src, lengths)
             memory_bank, tmp = rnn(packed_emb)
@@ -117,8 +129,9 @@ class AudioEncoder(EncoderBase):
             t, _, _ = memory_bank.size()
             memory_bank = memory_bank.transpose(0, 2)
             memory_bank = pool(memory_bank)
-            lengths = [int(math.floor((length - stride) / stride + 1))
-                       for length in lengths]
+            lengths = [
+                int(math.floor((length - stride) / stride + 1)) for length in lengths
+            ]
             memory_bank = memory_bank.transpose(0, 2)
             src = memory_bank
             t, _, num_feat = src.size()
@@ -128,12 +141,13 @@ class AudioEncoder(EncoderBase):
                 src = self.dropout(src)
 
         memory_bank = memory_bank.contiguous().view(-1, memory_bank.size(2))
-        memory_bank = self.W(memory_bank).view(-1, batch_size,
-                                               self.dec_rnn_size)
+        memory_bank = self.W(memory_bank).view(-1, batch_size, self.dec_rnn_size)
 
-        state = memory_bank.new_full((self.dec_layers * self.num_directions,
-                                      batch_size, self.dec_rnn_size_real), 0)
-        if self.rnn_type == 'LSTM':
+        state = memory_bank.new_full(
+            (self.dec_layers * self.num_directions, batch_size, self.dec_rnn_size_real),
+            0,
+        )
+        if self.rnn_type == "LSTM":
             # The encoder hidden is  (layers*directions) x batch x dim.
             encoder_final = (state, state)
         else:
@@ -143,4 +157,4 @@ class AudioEncoder(EncoderBase):
     def update_dropout(self, dropout):
         self.dropout.p = dropout
         for i in range(self.enc_layers - 1):
-            getattr(self, 'rnn_%d' % i).dropout = dropout
+            getattr(self, "rnn_%d" % i).dropout = dropout
